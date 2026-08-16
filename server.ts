@@ -20,16 +20,36 @@ async function startServer() {
 Files:
 ${files.slice(0, 500).map((f: any) => `- ${f.relative_path} (${f.size_bytes} bytes)`).join('\n')}`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents: prompt
-      });
+      let response;
+      let retries = 3;
+      let delay = 1000;
 
-      res.json({ suggestion: response.text });
+      while (retries > 0) {
+        try {
+          response = await ai.models.generateContent({
+            model: 'gemini-3.5-flash',
+            contents: prompt
+          });
+          break;
+        } catch (error: any) {
+          if (error?.status === 503 || error?.message?.includes('503') || error?.status === 'UNAVAILABLE') {
+            retries--;
+            if (retries === 0) throw error;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2;
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      res.json({ suggestion: response?.text });
     } catch (error: any) {
       console.error(error);
       if (error?.status === 429 || error?.message?.includes('429')) {
         res.status(429).json({ error: "AI API quota exceeded or rate limited. Please check your billing cap or try again later." });
+      } else if (error?.status === 503 || error?.message?.includes('503') || error?.status === 'UNAVAILABLE') {
+        res.status(503).json({ error: "The AI model is currently experiencing high demand. Please try again in a few moments." });
       } else {
         res.status(500).json({ error: error?.message || "Failed to generate AI suggestion." });
       }
