@@ -1,0 +1,112 @@
+--- src/App.tsx
++++ src/App.tsx
+@@ -266,54 +266,53 @@
+ 
+   const handleAdvancedExport = async () => {
+     try {
+-      let elementsToExport: HTMLElement[] = [];
+-      if (exportIncludeStats) {
+-        const el = document.getElementById('stats-container');
+-        if (el) elementsToExport.push(el);
+-      }
+-      if (exportIncludeCharts) {
+-        const el = document.getElementById('charts-container');
+-        if (el) elementsToExport.push(el);
+-      }
+-      
+-      if (elementsToExport.length === 0) return;
+-
+-      const container = document.createElement('div');
+-      container.style.backgroundColor = '#09090b'; // zinc-950
+-      container.style.padding = '32px';
+-      container.style.display = 'flex';
+-      container.style.flexDirection = 'column';
+-      container.style.gap = '32px';
+-      container.style.width = '1200px';
+-      
+-      // Temporarily append to DOM to allow html-to-image to work properly
+-      container.style.position = 'absolute';
+-      container.style.left = '-9999px';
+-      container.style.top = '-9999px';
+-      document.body.appendChild(container);
+-
+-      // Clone nodes
+-      elementsToExport.forEach(el => {
+-        const clone = el.cloneNode(true) as HTMLElement;
+-        clone.style.margin = '0'; // reset margins
+-        container.appendChild(clone);
+-      });
+-
+-      // Give charts time to render in the clone (though they might just be SVGs already)
+-      await new Promise(r => setTimeout(r, 100));
+-
+-      const url = await toPng(container, { 
+-        backgroundColor: '#09090b',
+-        pixelRatio: exportScale,
+-        style: { transform: 'scale(1)', transformOrigin: 'top left' }
+-      });
+-      
++      const images: { url: string, height: number, width: number }[] = [];
++      
++      const captureElement = async (id: string) => {
++        const el = document.getElementById(id);
++        if (!el) return null;
++        
++        // Use html-to-image on the original element directly
++        const url = await toPng(el, { 
++          backgroundColor: '#09090b',
++          pixelRatio: exportScale,
++          style: { transform: 'scale(1)', transformOrigin: 'top left' }
++        });
++        
++        return new Promise<{url: string, height: number, width: number}>((resolve) => {
++          const img = new Image();
++          img.onload = () => {
++            resolve({ url, height: img.height, width: img.width });
++          };
++          img.src = url;
++        });
++      };
++
++      if (exportIncludeStats) {
++        const data = await captureElement('stats-container');
++        if (data) images.push(data);
++      }
++      if (exportIncludeCharts) {
++        const data = await captureElement('charts-container');
++        if (data) images.push(data);
++      }
++      if (images.length === 0) return;
++      const padding = 32 * exportScale;
++      const gap = 32 * exportScale;
++      const totalWidth = Math.max(...images.map(i => i.width)) + (padding * 2);
++      const totalHeight = images.reduce((acc, curr) => acc + curr.height, 0) + (padding * 2) + (gap * (images.length - 1));
++      const canvas = document.createElement('canvas');
++      canvas.width = totalWidth;
++      canvas.height = totalHeight;
++      const ctx = canvas.getContext('2d');
++      if (!ctx) return;
++      ctx.fillStyle = '#09090b';
++      ctx.fillRect(0, 0, totalWidth, totalHeight);
++      let currentY = padding;
++      for (const imgData of images) {
++        const img = new Image();
++        await new Promise((resolve) => {
++          img.onload = resolve;
++          img.src = imgData.url;
++        });
++        const x = (totalWidth - imgData.width) / 2;
++        ctx.drawImage(img, x, currentY);
++        currentY += imgData.height + gap;
++      }
++      const url = canvas.toDataURL('image/png');
+       const a = document.createElement('a');
+       a.href = url;
+       a.download = `workspace_dashboard_${Date.now()}.png`;
+       document.body.appendChild(a);
+       a.click();
+       document.body.removeChild(a);
+       
+-      document.body.removeChild(container);
+       setShowExportOptionsModal(false);
+     } catch (e) {

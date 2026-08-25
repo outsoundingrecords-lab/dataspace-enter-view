@@ -79,7 +79,8 @@ const TreeItem: React.FC<{
   searchTerm?: string;
   onSelect?: (path: string) => void;
   selectedPath?: string;
-}> = ({ node, level = 0, searchTerm = "", onSelect, selectedPath }) => {
+  totalWorkspaceSize: number;
+}> = ({ node, level = 0, searchTerm = "", onSelect, selectedPath, totalWorkspaceSize }) => {
   const [isOpen, setIsOpen] = useState(level < 1);
   const isFolder = node.type === "folder";
   const itemRef = React.useRef<HTMLDivElement>(null);
@@ -89,12 +90,13 @@ const TreeItem: React.FC<{
   }, [searchTerm]);
 
   const isSelected = selectedPath === node.path;
-
   useEffect(() => {
     if (isSelected && itemRef.current) {
       itemRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [isSelected]);
+
+  const percentage = totalWorkspaceSize > 0 ? (node.sizeBytes / totalWorkspaceSize) * 100 : 0;
 
   if (!isFolder) {
     if (
@@ -102,9 +104,10 @@ const TreeItem: React.FC<{
       !node.name.toLowerCase().includes(searchTerm.toLowerCase())
     )
       return null;
+
     return (
       <div
-        className="flex items-center gap-2 py-1 px-2 hover:bg-zinc-800/50 rounded-md group text-sm cursor-default"
+        className="flex items-center gap-2 py-1 px-2 hover:bg-zinc-800/50 rounded-md group text-sm cursor-default relative"
         style={{ paddingLeft: `${level * 20 + 20}px` }}
       >
         <FileIcon className="w-4 h-4 text-zinc-500 flex-shrink-0" />
@@ -130,7 +133,6 @@ const TreeItem: React.FC<{
   const filterChildren = (nodes: TreeNode[]): TreeNode[] => {
     if (!searchTerm) return nodes;
     const lowerSearch = searchTerm.toLowerCase();
-
     return nodes.filter((n) => {
       if (n.name.toLowerCase().includes(lowerSearch)) return true;
       if (n.type === "folder" && n.children) {
@@ -154,40 +156,48 @@ const TreeItem: React.FC<{
     <div>
       <div
         ref={itemRef}
-        className={`flex items-center gap-2 py-1 px-2 hover:bg-zinc-800/50 rounded-md cursor-pointer group text-sm ${isSelected ? "bg-indigo-500/20 text-indigo-300" : ""}`}
+        className={`flex items-center gap-2 py-1 px-2 hover:bg-zinc-800/50 rounded-md cursor-pointer group text-sm relative ${isSelected ? "bg-indigo-500/20 text-indigo-300" : ""}`}
         style={{ paddingLeft: `${level * 20}px` }}
         onClick={(e) => {
           setIsOpen(!isOpen);
           if (onSelect) onSelect(node.path);
         }}
       >
-        {isOpen ? (
-          <ChevronDown className="w-4 h-4 text-zinc-400 group-hover:text-zinc-200 flex-shrink-0" />
-        ) : (
-          <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-zinc-200 flex-shrink-0" />
-        )}
-        <Folder
-          className={`w-4 h-4 flex-shrink-0 ${isSelected ? "text-indigo-400" : "text-indigo-500/70"}`}
+        {/* Background Progress Bar for Allocation */}
+        <div 
+          className="absolute left-0 top-0 bottom-0 bg-indigo-500/5 pointer-events-none rounded-md" 
+          style={{ width: `${Math.max(percentage, 1)}%`, zIndex: 0 }} 
         />
-        <span
-          className={`font-medium truncate ${isSelected ? "text-indigo-300" : (node.duplicateCount > 0 ? "text-rose-400" : "text-zinc-200")}`}
-          title={node.name}
-        >
-          {node.name}
-        </span>
-        <span className="ml-1 inline-flex items-center justify-center bg-zinc-800 text-zinc-400 text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px]">
-          {node.fileCount || 0}
-        </span>
-        {node.duplicateCount > 0 && (
-          <span className="ml-1 inline-flex items-center justify-center bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${node.duplicateCount} duplicate files inside`}>
-            {node.duplicateCount} dups
+        
+        <div className="relative z-10 flex items-center gap-2 w-full">
+          {isOpen ? (
+            <ChevronDown className="w-4 h-4 text-zinc-400 group-hover:text-zinc-200 flex-shrink-0" />
+          ) : (
+            <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-zinc-200 flex-shrink-0" />
+          )}
+          <Folder
+            className={`w-4 h-4 flex-shrink-0 ${isSelected ? "text-indigo-400" : "text-indigo-500/70"}`}
+          />
+          <span
+            className={`font-medium truncate ${isSelected ? "text-indigo-300" : (node.duplicateCount > 0 ? "text-rose-400" : "text-zinc-200")}`}
+            title={node.name}
+          >
+            {node.name}
           </span>
-        )}
-        <span className="text-xs text-zinc-600 ml-auto flex-shrink-0 pl-2">
-          {formatBytes(node.sizeBytes)}
-        </span>
+          <span className="ml-1 inline-flex items-center justify-center bg-zinc-800 text-zinc-400 text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px]">
+            {node.fileCount || 0}
+          </span>
+          {node.duplicateCount > 0 && (
+            <span className="ml-1 inline-flex items-center justify-center bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${node.duplicateCount} duplicate files inside`}>
+              {node.duplicateCount} dups
+            </span>
+          )}
+          <span className="text-xs text-zinc-600 ml-auto flex-shrink-0 pl-2 relative">
+            <span className="mr-2 text-[10px] text-zinc-500">{percentage.toFixed(1)}%</span>
+            {formatBytes(node.sizeBytes)}
+          </span>
+        </div>
       </div>
-
       {isOpen && (
         <div>
           {visibleChildren.map((child) => (
@@ -198,6 +208,7 @@ const TreeItem: React.FC<{
               searchTerm={searchTerm}
               onSelect={onSelect}
               selectedPath={selectedPath}
+              totalWorkspaceSize={totalWorkspaceSize}
             />
           ))}
         </div>
@@ -226,6 +237,8 @@ export function DirectoryTree({
   }, [initialSearchTerm]);
 
   const tree = useMemo(() => buildTree(inventory, duplicateHashes || new Set()), [inventory, duplicateHashes]);
+  
+  const totalWorkspaceSize = tree.sizeBytes;
 
   const children = Object.values(tree.children || {}) as TreeNode[];
 
@@ -283,6 +296,7 @@ export function DirectoryTree({
               searchTerm={searchTerm}
               onSelect={onSelectPath}
               selectedPath={selectedPath}
+              totalWorkspaceSize={totalWorkspaceSize}
             />
           ))
         ) : (

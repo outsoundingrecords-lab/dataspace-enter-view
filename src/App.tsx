@@ -37,6 +37,8 @@ import {
   History,
   GitCompare,
   FolderOpen,
+  Settings,
+  ArrowRightLeft,
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, Legend,
@@ -52,6 +54,15 @@ import { InventoryRow, DuplicateGroup } from './types';
 import { DirectoryTree } from './components/DirectoryTree';
 import { CountUp } from './components/CountUp';
 import { Thumbnail } from './components/Thumbnail';
+import { ToastContainer, ToastMessage } from './components/Toast';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcuts';
+import { Breadcrumbs } from './components/Breadcrumbs';
+import { HighlightText } from './components/HighlightText';
+import { FilePreview } from './components/FilePreview';
+import { FileComparisonModal } from './components/FileComparisonModal';
+import { ConfirmModal } from './components/ConfirmModal';
+import { DependencyMap } from './components/DependencyMap';
+import { formatBytes } from './utils';
 
 export default function App() {
   const [processing, setProcessing] = useState(false);
@@ -99,10 +110,10 @@ export default function App() {
   const [notesInput, setNotesInput] = useState('');
 
   // Preview state
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  // (preview is now handled by FilePreview component)
 
   // Tree and AI states
-  const [viewMode, setViewMode] = useState<'flat' | 'tree'>('flat');
+  const [viewMode, setViewMode] = useState<'flat' | 'tree' | 'deps'>('flat');
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
@@ -151,6 +162,19 @@ export default function App() {
         e.preventDefault();
         document.getElementById('searchInput')?.focus();
       }
+      if (e.ctrlKey && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault();
+        setShowCleanupModal(true);
+        setCleanupStep(0);
+      }
+      if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) {
+        e.preventDefault();
+        setShowExportOptionsModal(true);
+      }
+      if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setShowShortcutsModal(true);
+      }
       // Esc to close modals
       if (e.key === 'Escape') {
         setSelectedFileDetails(null);
@@ -159,6 +183,9 @@ export default function App() {
         setShowBulkTagModal(false);
         setCompareInventory(null);
         setShowCompareModal(false);
+        setShowExportOptionsModal(false);
+        setShowSettingsModal(false);
+        setShowShortcutsModal(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -193,6 +220,7 @@ export default function App() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const [highlightDuplicates, setHighlightDuplicates] = useState(false);
+  const [codeFilesOnly, setCodeFilesOnly] = useState(false);
   const [treeSearchTerm, setTreeSearchTerm] = useState('');
   const [selectedTreePath, setSelectedTreePath] = useState('');
   
@@ -212,6 +240,132 @@ export default function App() {
   const [compareProcessing, setCompareProcessing] = useState(false);
   const [compareProgress, setCompareProgress] = useState({ current: 0, total: 0, currentFile: '' });
   const compareInputRef = useRef<HTMLInputElement>(null);
+
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showExportOptionsModal, setShowExportOptionsModal] = useState(false);
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showFileComparisonModal, setShowFileComparisonModal] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<{title: string, message: string, confirmText?: string, onConfirm: () => void} | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [exportIncludeStats, setExportIncludeStats] = useState(true);
+  const [exportIncludeCharts, setExportIncludeCharts] = useState(true);
+  const [exportScale, setExportScale] = useState<number>(2);
+  const configInputRef = useRef<HTMLInputElement>(null);
+
+  const addToast = (message: string, type: ToastMessage['type'] = 'info') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3000);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
+
+  const handleAdvancedExport = async () => {
+    try {
+      const images: { url: string, height: number, width: number }[] = [];
+      const captureElement = async (id: string) => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        const url = await toPng(el, { backgroundColor: '#09090b', pixelRatio: exportScale, style: { transform: 'scale(1)', transformOrigin: 'top left' } });
+        return new Promise<{url: string, height: number, width: number}>((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve({ url, height: img.height, width: img.width });
+          img.src = url;
+        });
+      };
+      if (exportIncludeStats) {
+        const data = await captureElement('stats-container');
+        if (data) images.push(data);
+      }
+      if (exportIncludeCharts) {
+        const data = await captureElement('charts-container');
+        if (data) images.push(data);
+      }
+      if (images.length === 0) return;
+      const padding = 32 * exportScale;
+      const gap = 32 * exportScale;
+      const totalWidth = Math.max(...images.map(i => i.width)) + (padding * 2);
+      const totalHeight = images.reduce((acc, curr) => acc + curr.height, 0) + (padding * 2) + (gap * (images.length - 1));
+      const canvas = document.createElement('canvas');
+      canvas.width = totalWidth;
+      canvas.height = totalHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.fillStyle = '#09090b';
+      ctx.fillRect(0, 0, totalWidth, totalHeight);
+      let currentY = padding;
+      for (const imgData of images) {
+        const img = new Image();
+        await new Promise(r => { img.onload = r; img.src = imgData.url; });
+        ctx.drawImage(img, (totalWidth - imgData.width) / 2, currentY);
+        currentY += imgData.height + gap;
+      }
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `workspace_dashboard_${Date.now()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setShowExportOptionsModal(false);
+    } catch (e) {
+      console.error('Error in advanced export:', e);
+      addToast('Failed to export dashboard.', 'error');
+    }
+  };
+
+  const saveWorkspaceConfig = () => {
+    if (!inventory) return;
+    
+    const config = {
+      inventory,
+      duplicates,
+      columns,
+      hiddenExtensions: Array.from(hiddenExtensions),
+      sortField,
+      sortOrder,
+      pageSize
+    };
+    
+    const jsonString = JSON.stringify(config, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'workspace_config.json');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleLoadWorkspaceConfig = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const config = JSON.parse(event.target?.result as string);
+        if (config.inventory) setInventory(config.inventory);
+        if (config.duplicates) setDuplicates(config.duplicates);
+        if (config.columns) setColumns(config.columns);
+        if (config.hiddenExtensions) setHiddenExtensions(new Set(config.hiddenExtensions));
+        if (config.sortField) setSortField(config.sortField);
+        if (config.sortOrder) setSortOrder(config.sortOrder);
+        if (config.pageSize) setPageSize(config.pageSize);
+        setShowSettingsModal(false);
+      } catch (err) {
+        console.error('Failed to parse workspace config', err);
+        addToast('Invalid configuration file.', 'error');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
 
   // Persistence
   useEffect(() => {
@@ -265,12 +419,9 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedFileDetails) {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-        setPreviewUrl(null);
-      }
+      // preview url cleanup was here, now handled by FilePreview
     }
-  }, [selectedFileDetails, previewUrl]);
+  }, [selectedFileDetails]);
 
   const processFiles = async (files: FileList) => {
     setProcessing(true);
@@ -735,14 +886,6 @@ export default function App() {
     }, 100);
   };
 
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
   const totalSize = inventory ? inventory.reduce((acc, r) => acc + r.size_bytes, 0) : 0;
   const duplicateSize = duplicates.reduce((acc, g) => acc + (g.size_bytes * (g.count - 1)), 0);
 
@@ -972,6 +1115,15 @@ export default function App() {
       filtered = filtered.filter(f => mimeTypeFilters.has(f.mime_type || 'unknown/none'));
     }
 
+    if (codeFilesOnly) {
+      const codeExtensions = new Set([
+        '.ts', '.tsx', '.js', '.jsx', '.json', '.html', '.css', '.md', 
+        '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb',
+        '.sh', '.yaml', '.yml', '.xml', '.sql'
+      ]);
+      filtered = filtered.filter(f => f.extension && codeExtensions.has(f.extension.toLowerCase()));
+    }
+
     if (filterOnlyDuplicates) {
       const dupHashes = new Set(duplicates.map(d => d.sha256));
       filtered = filtered.filter(f => f.sha256 && dupHashes.has(f.sha256));
@@ -985,7 +1137,7 @@ export default function App() {
       if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [inventory, sortField, sortOrder, dateStart, dateEnd, fileSearch, extensionFilters, mimeTypeFilters, filterOnlyDuplicates, duplicates]);
+  }, [inventory, sortField, sortOrder, dateStart, dateEnd, fileSearch, extensionFilters, mimeTypeFilters, filterOnlyDuplicates, duplicates, codeFilesOnly]);
 
   const totalPages = Math.max(1, Math.ceil(sortedInventory.length / pageSize));
 
@@ -1002,12 +1154,65 @@ export default function App() {
   }, [totalPages, currentPage]);
 
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  
+  const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Do not interfere if a modal is open or if user is typing in an input
+      if (
+        showSettingsModal || showExportOptionsModal || showShortcutsModal || 
+        showFileComparisonModal || showCleanupModal || showCleanupHistory || 
+        showBulkRenameModal || showBulkTagModal || selectedFileDetails ||
+        viewMode === 'tree' || document.activeElement?.tagName === 'INPUT' || 
+        document.activeElement?.tagName === 'TEXTAREA' || confirmAction
+      ) {
+        return;
+      }
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setFocusedRowIndex(prev => Math.min(prev + 1, sortedInventory.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setFocusedRowIndex(prev => Math.max(prev - 1, 0));
+      } else if (e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        if (focusedRowIndex >= 0 && focusedRowIndex < sortedInventory.length) {
+          const file = sortedInventory[focusedRowIndex];
+          const newSelected = new Set(selectedPaths);
+          if (newSelected.has(file.relative_path)) {
+            newSelected.delete(file.relative_path);
+          } else {
+            newSelected.add(file.relative_path);
+          }
+          setSelectedPaths(newSelected);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    showSettingsModal, showExportOptionsModal, showShortcutsModal, 
+    showFileComparisonModal, showCleanupModal, showCleanupHistory, 
+    showBulkRenameModal, showBulkTagModal, selectedFileDetails,
+    viewMode, sortedInventory, focusedRowIndex, selectedPaths, confirmAction
+  ]);
+
   const virtualizer = useVirtualizer({
     count: sortedInventory.length,
     getScrollElement: () => tableContainerRef.current,
     estimateSize: () => 48, // approximate height of a table row
     overscan: 5,
   });
+
+  // Scroll focused item into view
+  useEffect(() => {
+    if (focusedRowIndex >= 0) {
+      virtualizer.scrollToIndex(focusedRowIndex, { align: 'auto' });
+    }
+  }, [focusedRowIndex, virtualizer]);
 
   const paginatedInventory = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
@@ -1363,18 +1568,59 @@ export default function App() {
           {inventory && !processing && (
             <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
               
-              {/* Metrics Grid */}
-              <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+              {/* Navigation Tabs */}
+              <div className="flex items-center gap-4 border-b border-zinc-800">
+                <button
+                  onClick={() => setViewMode('flat')}
+                  className={`pb-3 text-sm font-medium border-b-2 transition-colors ${viewMode === 'flat' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+                >
+                  Workspace Dashboard
+                </button>
+                <button
+                  onClick={() => setViewMode('deps')}
+                  className={`pb-3 text-sm font-medium border-b-2 transition-colors ${viewMode === 'deps' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+                >
+                  Dependency Map
+                </button>
+              </div>
+
+              {viewMode === 'deps' ? (
+                <DependencyMap inventory={inventory} fileObjects={fileObjectsRef.current} />
+              ) : (
+                <>
+                  {/* Metrics Grid */}
+                  <div id="stats-container" className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                    <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5">
+                      <p className="text-sm text-zinc-500 mb-1 font-medium">Total Files</p>
+                      <p className="text-2xl text-zinc-100 font-light"><CountUp end={inventory.length} /></p>
+                    </div>
+                    <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5">
+                      <p className="text-sm text-zinc-500 mb-1 font-medium">Total Size</p>
+                      <p className="text-2xl text-zinc-100 font-light"><CountUp end={totalSize} formatFn={formatBytes} /></p>
+                    </div>
                 <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5">
-                  <p className="text-sm text-zinc-500 mb-1 font-medium">Total Files</p>
-                  <p className="text-2xl text-zinc-100 font-light"><CountUp end={inventory.length} /></p>
-                </div>
-                <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5">
-                  <p className="text-sm text-zinc-500 mb-1 font-medium">Total Size</p>
-                  <p className="text-2xl text-zinc-100 font-light"><CountUp end={totalSize} formatFn={formatBytes} /></p>
-                </div>
-                <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5">
-                  <p className="text-sm text-zinc-500 mb-1 font-medium">Duplicate Groups</p>
+                  <p className="text-sm text-zinc-500 mb-1 font-medium flex justify-between items-center">
+                    Duplicate Groups
+                    {duplicates.length > 0 && (
+                      <button 
+                        onClick={() => {
+                          const newSelection = new Set(selectedPaths);
+                          let added = 0;
+                          duplicates.forEach(d => {
+                            d.paths.forEach(p => {
+                              newSelection.add(p);
+                              added++;
+                            });
+                          });
+                          setSelectedPaths(newSelection);
+                          addToast(`Selected ${added} duplicate files`, 'success');
+                        }}
+                        className="text-xs bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded transition-colors"
+                      >
+                        Select All
+                      </button>
+                    )}
+                  </p>
                   <p className="text-2xl text-rose-400 font-light"><CountUp end={duplicates.length} /></p>
                 </div>
                 <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5">
@@ -1460,6 +1706,13 @@ export default function App() {
                   Validate Hashes
                 </button>
                 <button
+                  onClick={() => setShowSettingsModal(true)}
+                  className="flex-1 min-w-[140px] bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 text-zinc-200 px-4 py-3 rounded-xl text-sm font-medium transition-all active:scale-95 flex items-center justify-center gap-2 shadow-sm"
+                >
+                  <Settings className="w-4 h-4 text-zinc-400" />
+                  Settings
+                </button>
+                <button
                   onClick={handleRefresh}
                   className="flex-none bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-400 px-4 py-3 rounded-xl text-sm font-medium transition-all active:scale-95 flex items-center justify-center gap-2 shadow-sm"
                 >
@@ -1476,11 +1729,11 @@ export default function App() {
                 </h2>
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={exportCharts}
+                    onClick={() => setShowExportOptionsModal(true)}
                     className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
                   >
                     <Download className="w-4 h-4" />
-                    Export Charts
+                    Advanced Export
                   </button>
                   <button
                     onClick={handleAiOrganize}
@@ -1519,6 +1772,19 @@ export default function App() {
                           outerRadius={80}
                           paddingAngle={5}
                           dataKey="value"
+                          onClick={(entry) => {
+                            if (entry && entry.name) {
+                              const newFilters = new Set(extensionFilters);
+                              if (newFilters.has(entry.name)) {
+                                newFilters.delete(entry.name);
+                              } else {
+                                newFilters.add(entry.name);
+                              }
+                              setExtensionFilters(newFilters);
+                              addToast(`Toggled filter for ${entry.name}`, 'info');
+                            }
+                          }}
+                          className="cursor-pointer"
                         >
                           {visibleExtensionData.map((entry, index) => {
                             const originalIndex = extensionData.findIndex(d => d.name === entry.name);
@@ -1833,24 +2099,27 @@ export default function App() {
                     </div>
                     
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-                      <div className="relative flex-1 md:w-56">
-                        <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                        <input 
-                          id="searchInput"
-                          type="text" 
-                          placeholder="Filter files or paths..." 
-                          value={fileSearch}
-                          onChange={e => setFileSearch(e.target.value)}
-                          className="bg-zinc-950 border border-zinc-800 text-zinc-200 text-sm rounded-lg pl-9 pr-8 py-1.5 focus:outline-none focus:border-indigo-500 w-full"
-                        />
-                        {fileSearch && (
-                          <button 
-                            onClick={() => setFileSearch('')}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                      <div className="flex flex-col gap-1 w-full md:w-auto">
+                        <div className="relative flex-1 md:w-56">
+                          <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input 
+                            id="searchInput"
+                            type="text" 
+                            placeholder="Filter files or paths..." 
+                            value={fileSearch}
+                            onChange={e => setFileSearch(e.target.value)}
+                            className="bg-zinc-950 border border-zinc-800 text-zinc-200 text-sm rounded-lg pl-9 pr-8 py-1.5 focus:outline-none focus:border-indigo-500 w-full"
+                          />
+                          {fileSearch && (
+                            <button 
+                              onClick={() => setFileSearch('')}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        {fileSearch.includes('/') && <Breadcrumbs path={fileSearch} onNavigate={setFileSearch} />}
                       </div>
 
                       <div className="relative">
@@ -1923,8 +2192,8 @@ export default function App() {
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">
+                      <div className="flex items-center gap-4 bg-zinc-950 p-1.5 px-3 rounded-lg border border-zinc-800 shrink-0">
+                        <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer hover:text-zinc-300 transition-colors">
                           <input 
                             type="checkbox" 
                             checked={highlightDuplicates}
@@ -1932,6 +2201,16 @@ export default function App() {
                             className="rounded border-zinc-700 bg-zinc-900 text-indigo-500 focus:ring-indigo-500 cursor-pointer"
                           />
                           Highlight Duplicates
+                        </label>
+                        <div className="w-px h-4 bg-zinc-800"></div>
+                        <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer hover:text-zinc-300 transition-colors">
+                          <input 
+                            type="checkbox" 
+                            checked={codeFilesOnly}
+                            onChange={e => setCodeFilesOnly(e.target.checked)}
+                            className="rounded border-zinc-700 bg-zinc-900 text-indigo-500 focus:ring-indigo-500 cursor-pointer"
+                          />
+                          Code Files Only
                         </label>
                       </div>
 
@@ -1953,6 +2232,15 @@ export default function App() {
                       
                       {selectedPaths.size > 0 && (
                         <div className="flex gap-2">
+                          {selectedPaths.size === 2 && (
+                            <button
+                              onClick={() => setShowFileComparisonModal(true)}
+                              className="flex items-center gap-2 text-sm bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 px-3 py-1.5 rounded-lg border border-purple-500/20 transition-colors"
+                            >
+                              <ArrowRightLeft className="w-4 h-4" />
+                              Compare Files
+                            </button>
+                          )}
                           <button
                             onClick={() => setShowBulkTagModal(true)}
                             className="flex items-center gap-2 text-sm bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 px-3 py-1.5 rounded-lg border border-indigo-500/20 transition-colors"
@@ -1973,6 +2261,17 @@ export default function App() {
                           >
                             <Edit2 className="w-4 h-4" />
                             Bulk Rename ({selectedPaths.size})
+                          </button>
+                          <button
+                            onClick={() => {
+                              const paths = Array.from(selectedPaths).join('\n');
+                              navigator.clipboard.writeText(paths);
+                              addToast(`Copied ${selectedPaths.size} paths to clipboard`, 'success');
+                            }}
+                            className="flex items-center gap-2 text-sm bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 px-3 py-1.5 rounded-lg border border-zinc-600/50 transition-colors"
+                          >
+                            <Copy className="w-4 h-4" />
+                            Copy Paths ({selectedPaths.size})
                           </button>
                           <button
                             onClick={handleBulkDelete}
@@ -2003,6 +2302,7 @@ export default function App() {
                             <button onClick={() => { setSortField('modified_utc'); setSortOrder('desc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300">Newest Files</button>
                             <button onClick={() => { setSortField('modified_utc'); setSortOrder('asc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300">Oldest Files</button>
                             <button onClick={() => { setSortField('sha256'); setSortOrder('asc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300">By Hash</button>
+                            <button onClick={() => { setSortField('size_bytes'); setSortOrder('asc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300 border-t border-zinc-800 mt-1 pt-2">Empty Files First</button>
                           </div>
                         )}
                       </div>
@@ -2115,10 +2415,11 @@ export default function App() {
                               const file = sortedInventory[virtualRow.index];
                               if (!file) return null;
                               const isDuplicate = highlightDuplicates && duplicates.some(d => d.sha256 === file.sha256);
+                              const isFocused = virtualRow.index === focusedRowIndex;
                               return (
                               <tr 
                                 key={`${file.sha256}-${file.relative_path}`} 
-                                className={`group animate-in fade-in duration-300 transition-colors cursor-pointer ${isDuplicate ? 'bg-rose-500/10 hover:bg-rose-500/20' : 'hover:bg-zinc-800/30'}`}
+                                className={`group relative animate-in fade-in duration-300 transition-all hover:-translate-y-[1px] hover:shadow-lg hover:z-10 cursor-pointer ${isDuplicate ? 'bg-rose-500/10 hover:bg-rose-500/20' : 'hover:bg-zinc-800/30'} ${isFocused ? 'ring-2 ring-inset ring-indigo-500 bg-indigo-500/10' : ''}`}
                                 onClick={() => {
                                   setSelectedFileDetails(file);
                                   setIsRenaming(false);
@@ -2146,7 +2447,7 @@ export default function App() {
                                   <td className={`px-4 py-3 max-w-[200px] md:max-w-[400px] sticky z-20 shadow-[1px_0_0_#27272a,5px_0_15px_-3px_rgba(0,0,0,0.5)] ${isDuplicate ? 'bg-[#1a0f14] group-hover:bg-[#2a141d]' : 'bg-zinc-950 group-hover:bg-zinc-900'}`} style={{ left: columns.thumbnail ? 110 : 50 }}>
                                     <div className="flex items-center justify-between gap-2">
                                       <div className="flex items-center gap-2 truncate" title={file.relative_path}>
-                                        <span className="truncate">{file.relative_path}</span>
+                                        <span className="truncate"><HighlightText text={file.relative_path} query={fileSearch} /></span>
                                         {file.error && (
                                           <span 
                                             className="shrink-0 bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 cursor-help"
@@ -2278,10 +2579,16 @@ export default function App() {
                                       <button 
                                         className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-zinc-800 transition-colors"
                                         onClick={() => {
-                                          if (window.confirm('Are you sure you want to delete this file?')) {
-                                            const newInv = inventory.filter(f => f.relative_path !== file.relative_path);
-                                            setInventory(newInv);
-                                          }
+                                          setConfirmAction({
+                                            title: 'Delete File',
+                                            message: `Are you sure you want to delete "${file.file_name}"?`,
+                                            onConfirm: () => {
+                                              const newInv = inventory.filter(f => f.relative_path !== file.relative_path);
+                                              setInventory(newInv);
+                                              addToast(`Deleted ${file.file_name}`, 'success');
+                                              setConfirmAction(null);
+                                            }
+                                          });
                                           setActiveRowMenu(null);
                                         }}
                                       >Delete</button>
@@ -2321,6 +2628,8 @@ export default function App() {
                   </div>
                 </div>
               </div>
+              </>
+              )}
             </section>
           )}
         </main>
@@ -2641,6 +2950,17 @@ export default function App() {
             
             <div className="p-4 border-t border-zinc-800 bg-zinc-950/50 flex justify-end gap-3">
               <button
+                onClick={() => {
+                  const hashes = duplicates.map(g => g.sha256).join('\n');
+                  navigator.clipboard.writeText(hashes);
+                  addToast(`Copied ${duplicates.length} hashes to clipboard`, 'success');
+                }}
+                className="px-4 py-2 text-sm font-medium text-zinc-300 bg-zinc-800/50 hover:bg-zinc-700/50 border border-zinc-700 rounded-lg transition-all active:scale-95 mr-auto flex items-center gap-2"
+              >
+                <Copy className="w-4 h-4" />
+                Copy All Hashes
+              </button>
+              <button
                 onClick={() => setShowCleanupModal(false)}
                 className="px-4 py-2 text-sm font-medium text-zinc-400 hover:text-zinc-200 transition-all active:scale-95"
               >
@@ -2648,14 +2968,18 @@ export default function App() {
               </button>
               <button
                 onClick={() => {
-                  if (window.confirm('Are you sure you want to execute this deduplication plan? The redundant files will be removed from the inventory.')) {
-                    // Execute deduplication
-                    let filesToDelete = new Set<string>();
-                    
-                    duplicates.forEach(group => {
-                      const filesInGroup = inventory?.filter(f => group.paths.includes(f.relative_path)) || [];
+                  setConfirmAction({
+                    title: 'Execute Deduplication',
+                    message: 'Are you sure you want to execute this deduplication plan? The redundant files will be removed from the inventory.',
+                    confirmText: 'Execute',
+                    onConfirm: () => {
+                      // Execute deduplication
+                      let filesToDelete = new Set<string>();
                       
-                      let fileToKeep = filesInGroup[0];
+                      duplicates.forEach(group => {
+                        const filesInGroup = inventory?.filter(f => group.paths.includes(f.relative_path)) || [];
+                        
+                        let fileToKeep = filesInGroup[0];
                       if (cleanupAction === 'keep_oldest' as any) {
                         fileToKeep = [...filesInGroup].sort((a, b) => new Date(a.modified_utc).getTime() - new Date(b.modified_utc).getTime())[0];
                       } else if (cleanupAction === 'keep_newest' as any) {
@@ -2673,13 +2997,15 @@ export default function App() {
                     
                     if (inventory) {
                       setInventory(inventory.filter(f => !filesToDelete.has(f.relative_path)));
-                      // Re-compute duplicates will be handled implicitly by a useEffect on inventory change if it exists, or we force a clear:
                       setDuplicates([]); 
                     }
                     setShowCleanupModal(false);
+                    setConfirmAction(null);
+                    addToast(`Removed ${filesToDelete.size} redundant files`, 'success');
                   }
-                }}
-                disabled={duplicates.length === 0}
+                });
+              }}
+              disabled={duplicates.length === 0}
                 className="flex items-center gap-2 px-6 py-2 text-sm font-medium bg-rose-600 hover:bg-rose-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-lg transition-all active:scale-95 shadow-sm"
               >
                 <Trash2 className="w-4 h-4" />
@@ -3010,13 +3336,21 @@ export default function App() {
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="block text-zinc-500 text-xs uppercase tracking-wider">Notes</span>
-                  <button onClick={() => handleSaveNotes(notesInput)} className="text-indigo-400 text-xs hover:text-indigo-300 transition-colors font-medium">Save Notes</button>
+                  <span className="block text-zinc-500 text-xs uppercase tracking-wider">Notes (Auto-saves on blur)</span>
+                  {selectedFileDetails.notes !== notesInput.trim() && (
+                    <button onClick={() => { handleSaveNotes(notesInput); addToast('Notes saved', 'success'); }} className="text-indigo-400 text-xs hover:text-indigo-300 transition-colors font-medium">Save Now</button>
+                  )}
                 </div>
                 <textarea
                   placeholder="Add ephemeral notes..."
                   value={notesInput}
                   onChange={e => setNotesInput(e.target.value)}
+                  onBlur={() => {
+                    if (selectedFileDetails.notes !== notesInput.trim()) {
+                      handleSaveNotes(notesInput);
+                      addToast('Notes autosaved', 'success');
+                    }
+                  }}
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-200 text-sm focus:outline-none focus:border-indigo-500 min-h-[60px] resize-y"
                 />
               </div>
@@ -3038,23 +3372,15 @@ export default function App() {
                   <div className="text-zinc-200">{new Date(selectedFileDetails.modified_utc).toLocaleString()}</div>
                 </div>
               </div>
+
+              {fileObjectsRef.current.has(selectedFileDetails.relative_path) && (
+                <FilePreview 
+                  file={fileObjectsRef.current.get(selectedFileDetails.relative_path)} 
+                  extension={selectedFileDetails.extension || ''} 
+                />
+              )}
             </div>
             <div className="p-4 border-t border-zinc-800 bg-zinc-950/50 flex justify-end gap-2">
-              {['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp'].includes((selectedFileDetails.extension || '').toLowerCase()) && fileObjectsRef.current.has(selectedFileDetails.relative_path) && (
-                <button
-                  onClick={() => {
-                    const file = fileObjectsRef.current.get(selectedFileDetails.relative_path);
-                    if (file) {
-                      if (previewUrl) URL.revokeObjectURL(previewUrl);
-                      setPreviewUrl(URL.createObjectURL(file));
-                    }
-                  }}
-                  className="flex items-center gap-2 text-sm bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 px-4 py-2 rounded-lg border border-indigo-500/30 transition-colors mr-auto"
-                >
-                  <Search className="w-4 h-4" />
-                  Preview
-                </button>
-              )}
               <button
                 onClick={() => {
                   const folderPath = selectedFileDetails.relative_path.split('/').slice(0, -1).join('/');
@@ -3069,14 +3395,147 @@ export default function App() {
                 Open Folder
               </button>
             </div>
-            {previewUrl && (
-              <div className="p-4 border-t border-zinc-800 bg-zinc-950 flex justify-center items-center">
-                <img src={previewUrl} alt="File Preview" className="max-w-full max-h-64 object-contain rounded-lg border border-zinc-800" />
-              </div>
-            )}
           </div>
         </div>
       )}
+      {showSettingsModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full overflow-hidden shadow-2xl">
+            <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900 flex justify-between items-center">
+              <h3 className="font-medium text-zinc-100 flex items-center gap-2">
+                <Settings className="w-4 h-4 text-indigo-400" />
+                Workspace Settings
+              </h3>
+              <button onClick={() => setShowSettingsModal(false)} className="text-zinc-500 hover:text-zinc-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div>
+                <h4 className="text-sm font-medium text-zinc-300 mb-2">Save Workspace Configuration</h4>
+                <p className="text-xs text-zinc-500 mb-4">Export your current workspace settings, column preferences, tags, and notes to a JSON file.</p>
+                <button
+                  onClick={saveWorkspaceConfig}
+                  className="w-full flex items-center justify-center gap-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-lg transition-colors"
+                >
+                  <Save className="w-4 h-4" />
+                  Save Configuration
+                </button>
+              </div>
+
+              <div className="pt-6 border-t border-zinc-800">
+                <h4 className="text-sm font-medium text-zinc-300 mb-2">Load Workspace Configuration</h4>
+                <p className="text-xs text-zinc-500 mb-4">Import a previously saved workspace configuration JSON file to restore your settings, tags, and notes.</p>
+                <input 
+                  type="file" 
+                  accept=".json" 
+                  ref={configInputRef} 
+                  className="hidden" 
+                  onChange={handleLoadWorkspaceConfig} 
+                />
+                <button
+                  onClick={() => configInputRef.current?.click()}
+                  className="w-full flex items-center justify-center gap-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-4 py-2.5 rounded-lg border border-zinc-700 transition-colors"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  Load Configuration
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showExportOptionsModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full overflow-hidden shadow-2xl">
+            <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900 flex justify-between items-center">
+              <h3 className="font-medium text-zinc-100 flex items-center gap-2">
+                <Download className="w-4 h-4 text-indigo-400" />
+                Advanced Export Options
+              </h3>
+              <button onClick={() => setShowExportOptionsModal(false)} className="text-zinc-500 hover:text-zinc-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div>
+                <h4 className="text-sm font-medium text-zinc-300 mb-3">Include Sections</h4>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 text-sm text-zinc-300 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={exportIncludeStats}
+                      onChange={(e) => setExportIncludeStats(e.target.checked)}
+                      className="rounded border-zinc-700 bg-zinc-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-zinc-900" 
+                    />
+                    Include Statistics Cards
+                  </label>
+                  <label className="flex items-center gap-3 text-sm text-zinc-300 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={exportIncludeCharts}
+                      onChange={(e) => setExportIncludeCharts(e.target.checked)}
+                      className="rounded border-zinc-700 bg-zinc-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-zinc-900" 
+                    />
+                    Include Charts
+                  </label>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-zinc-800">
+                <h4 className="text-sm font-medium text-zinc-300 mb-3">Export Quality</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setExportScale(1)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${exportScale === 1 ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-400' : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-zinc-300'}`}
+                  >
+                    Standard (1x)
+                  </button>
+                  <button
+                    onClick={() => setExportScale(2)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${exportScale === 2 ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-400' : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-zinc-300'}`}
+                  >
+                    High-Res (2x)
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  onClick={handleAdvancedExport}
+                  disabled={!exportIncludeStats && !exportIncludeCharts}
+                  className="w-full flex items-center justify-center gap-2 text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white px-4 py-2.5 rounded-lg transition-colors shadow-sm"
+                >
+                  <Download className="w-4 h-4" />
+                  Export Dashboard
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFileComparisonModal && inventory && (
+        <FileComparisonModal
+          files={inventory.filter(f => selectedPaths.has(f.relative_path))}
+          fileObjects={fileObjectsRef.current}
+          onClose={() => setShowFileComparisonModal(false)}
+        />
+      )}
+
+      {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          message={confirmAction.message}
+          confirmText={confirmAction.confirmText}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
+      {showShortcutsModal && <KeyboardShortcutsModal onClose={() => setShowShortcutsModal(false)} />}
     </div>
   );
 }
