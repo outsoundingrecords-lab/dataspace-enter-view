@@ -203,6 +203,7 @@ export default function App() {
   const [cleanupHistory, setCleanupHistory] = useState<{ id: string, timestamp: number, action: string, count: number, size: number, paths: string[] }[]>([]);
   const [showCleanupHistory, setShowCleanupHistory] = useState(false);
   const [hideMarkedForCleanup, setHideMarkedForCleanup] = useState(false);
+  const [hashFilter, setHashFilter] = useState('');
   
   // Bulk Tag State
   const [showBulkTagModal, setShowBulkTagModal] = useState(false);
@@ -623,6 +624,18 @@ export default function App() {
     setInventory(updatedInventory);
     setDuplicates(dups);
     setProcessing(false);
+  };
+
+  const downloadHashesTXT = () => {
+    if (!sortedInventory) return;
+    const hashes = sortedInventory.filter(f => f.sha256).map(f => f.sha256).join('\n');
+    const blob = new Blob([hashes], { type: 'text/plain;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `workspace_hashes_${Date.now()}.txt`;
+    link.click();
+    setShowExportMenu(false);
+    setShowExportOptionsModal(false);
   };
 
   const downloadSummary = () => {
@@ -1687,6 +1700,9 @@ export default function App() {
                     </button>
                     <button onClick={downloadSummary} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
                       Download Summary (TXT)
+                    </button>
+                    <button onClick={downloadHashesTXT} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
+                      Download Hashes (TXT)
                     </button>
                   </div>
                   )}
@@ -2900,12 +2916,27 @@ export default function App() {
               
               {/* Main Preview */}
               <div className="flex-1 p-6 overflow-y-auto bg-zinc-900/20">
-                <div className="mb-4 text-sm text-zinc-400 flex items-center justify-between">
-                  <span>Found <strong>{duplicates.length}</strong> exact duplicate groups based on SHA-256 hash.</span>
-                  <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-1 rounded text-xs">Simulated Preview</span>
+                <div className="mb-4 text-sm text-zinc-400 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <span>
+                      Found <strong>{duplicates.length}</strong> duplicate groups
+                      {hashFilter && <span> (<strong>{duplicates.filter(g => g.sha256.toLowerCase().includes(hashFilter.toLowerCase())).length}</strong> matching filter)</span>}.
+                    </span>
+                    <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-1 rounded text-xs shrink-0">Simulated Preview</span>
+                  </div>
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Filter by Hash..."
+                      value={hashFilter}
+                      onChange={(e) => setHashFilter(e.target.value)}
+                      className="bg-zinc-950 border border-zinc-800 text-zinc-200 text-sm rounded-lg pl-9 pr-3 py-1.5 focus:outline-none focus:border-indigo-500 w-full md:w-64"
+                    />
+                  </div>
                 </div>
                 <div className="space-y-4">
-                  {duplicates.map(group => {
+                  {duplicates.filter(group => group.sha256.toLowerCase().includes(hashFilter.toLowerCase())).map(group => {
                     const filesInGroup = inventory?.filter(f => group.paths.includes(f.relative_path)) || [];
                     
                     // Determine which file to keep based on the rule
@@ -2951,9 +2982,10 @@ export default function App() {
             <div className="p-4 border-t border-zinc-800 bg-zinc-950/50 flex justify-end gap-3">
               <button
                 onClick={() => {
-                  const hashes = duplicates.map(g => g.sha256).join('\n');
+                  const filteredDuplicates = duplicates.filter(group => group.sha256.toLowerCase().includes(hashFilter.toLowerCase()));
+                  const hashes = filteredDuplicates.map(g => g.sha256).join('\n');
                   navigator.clipboard.writeText(hashes);
-                  addToast(`Copied ${duplicates.length} hashes to clipboard`, 'success');
+                  addToast(`Copied ${filteredDuplicates.length} hashes to clipboard`, 'success');
                 }}
                 className="px-4 py-2 text-sm font-medium text-zinc-300 bg-zinc-800/50 hover:bg-zinc-700/50 border border-zinc-700 rounded-lg transition-all active:scale-95 mr-auto flex items-center gap-2"
               >
@@ -3501,7 +3533,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="pt-2">
+              <div className="pt-2 flex flex-col gap-3">
                 <button
                   onClick={handleAdvancedExport}
                   disabled={!exportIncludeStats && !exportIncludeCharts}
@@ -3509,6 +3541,20 @@ export default function App() {
                 >
                   <Download className="w-4 h-4" />
                   Export Dashboard
+                </button>
+                
+                <div className="relative flex items-center py-2">
+                  <div className="flex-grow border-t border-zinc-800"></div>
+                  <span className="flex-shrink-0 mx-4 text-zinc-500 text-xs uppercase tracking-wider">Other Exports</span>
+                  <div className="flex-grow border-t border-zinc-800"></div>
+                </div>
+
+                <button
+                  onClick={downloadHashesTXT}
+                  className="w-full flex items-center justify-center gap-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-4 py-2.5 rounded-lg transition-colors shadow-sm"
+                >
+                  <Download className="w-4 h-4 text-emerald-400" />
+                  Download Filtered Hashes (TXT)
                 </button>
               </div>
             </div>
