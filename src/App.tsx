@@ -54,7 +54,9 @@ import {
   FolderTree,
   FileText,
   FileCode,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Clock,
+  Table
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, Legend,
@@ -65,6 +67,7 @@ const RechartsLegend: any = Legend;
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { toPng } from 'html-to-image';
+import { motion, useReducedMotion } from 'motion/react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { InventoryRow, DuplicateGroup, FileRecord, FileCategory } from './types';
 import { DirectoryTree } from './components/DirectoryTree';
@@ -83,6 +86,24 @@ import { MobileBottomDock, MobileTab } from './components/MobileBottomDock';
 import { DesktopSidebar, DesktopNavModule } from './components/DesktopSidebar';
 import { InspectorPanel } from './components/InspectorPanel';
 import { GovernanceAuditModal } from './components/GovernanceAuditModal';
+import { IgnorePatternModal } from './components/IgnorePatternModal';
+import { ModificationDateChart } from './components/ModificationDateChart';
+import {
+  PreScanResult,
+  preScanCandidateFiles,
+  matchesPathPattern,
+  WorkspaceIgnoreConfig,
+  getStoredIgnoreConfig,
+  saveStoredIgnoreConfig
+} from './utils/ignorePatterns';
+import {
+  AgeBracketId,
+  AGE_BRACKETS,
+  getFileAgeBracket
+} from './utils/dateDistribution';
+import {
+  evaluateFuzzyMatch
+} from './utils/fuzzySearch';
 import { formatBytes, getFileCategory, FILE_CATEGORIES, CATEGORY_STYLES } from './utils';
 
 export default function App() {
@@ -96,6 +117,33 @@ export default function App() {
   
   // Date and Search filters
   const [fileSearch, setFileSearch] = useState<string>('');
+  const [fileSearchInput, setFileSearchInput] = useState<string>('');
+  const [isSearchDebouncing, setIsSearchDebouncing] = useState(false);
+  const [selectedAgeBracket, setSelectedAgeBracket] = useState<AgeBracketId | null>(null);
+  const [showAgeMenu, setShowAgeMenu] = useState(false);
+
+  // Automated Ignore Pattern Pre-scan suggestions
+  const pendingFilesRef = useRef<FileList | File[] | null>(null);
+  const [preScanResult, setPreScanResult] = useState<PreScanResult | null>(null);
+  const [showIgnoreModal, setShowIgnoreModal] = useState<boolean>(false);
+  const [ignoreConfig, setIgnoreConfig] = useState<WorkspaceIgnoreConfig>(getStoredIgnoreConfig);
+
+  // 150ms debounce for fuzzy search query
+  useEffect(() => {
+    setIsSearchDebouncing(fileSearchInput !== fileSearch);
+    const timer = setTimeout(() => {
+      setFileSearch(fileSearchInput);
+      setIsSearchDebouncing(false);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [fileSearchInput]);
+
+  const handleSetSearch = (val: string) => {
+    setFileSearchInput(val);
+    setFileSearch(val);
+    setIsSearchDebouncing(false);
+  };
+
   const [dateStart, setDateStart] = useState<string>('');
   const [dateEnd, setDateEnd] = useState<string>('');
   const [categoryFilters, setCategoryFilters] = useState<Set<FileCategory>>(new Set());
@@ -471,7 +519,7 @@ export default function App() {
     }
   }, [selectedFileDetails]);
 
-  const processFiles = async (files: FileList) => {
+  const processFiles = async (files: FileList | File[]) => {
     setProcessing(true);
     setInventory(null);
     setDuplicates([]);
@@ -554,9 +602,26 @@ export default function App() {
     setProcessing(false);
   };
 
+  const initiateFileSelection = (files: FileList | File[]) => {
+    // 1. Run Pre-scan for Automated Ignore Pattern Suggestions
+    const preScan = preScanCandidateFiles(files);
+    
+    // If recognized build system, source control, or system metadata patterns are detected,
+    // prompt suggested exclude rules before starting full index execution.
+    if (preScan.hasSuggestions) {
+      pendingFilesRef.current = files;
+      setPreScanResult(preScan);
+      setShowIgnoreModal(true);
+      return;
+    }
+
+    // No suggestions detected, directly process files
+    processFiles(files);
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      processFiles(e.target.files);
+      initiateFileSelection(e.target.files);
     }
   };
 
@@ -744,6 +809,69 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const copyAsMarkdownTable = async () => {
+    if (!sortedInventory || sortedInventory.length === 0) {
+      addToast('No files in the current filtered inventory to copy', 'info');
+      setShowExportMenu(false);
+      return;
+    }
+
+    const escapeCell = (val: any): string => {
+      if (val === null || val === undefined) return '';
+      return String(val).replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ').trim();
+    };
+
+    const headers = ['File Name', 'Relative Path', 'Category', 'Size', 'Modified (UTC)', 'Extension', 'SHA-256'];
+    const headerRow = `| ${headers.join(' | ')} |`;
+    const separatorRow = `| :--- | :--- | :--- | :---: | :--- | :---: | :--- |`;
+
+    const rows = sortedInventory.map(row => {
+      const category = row.category || getFileCategory(row.file_name, row.extension, row.mime_type);
+      const formattedSize = formatBytes(row.size_bytes);
+      const ext = row.extension || (row.file_name.includes('.') ? `.${row.file_name.split('.').pop()}` : '-');
+      const hash = row.sha256 ? `\`${row.sha256}\`` : '-';
+
+      return `| ${escapeCell(row.file_name)} | ${escapeCell(row.relative_path)} | ${escapeCell(category)} | ${formattedSize} | ${escapeCell(row.modified_utc)} | ${escapeCell(ext)} | ${hash} |`;
+    });
+
+    const markdownTable = [headerRow, separatorRow, ...rows].join('\n');
+
+    let copied = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(markdownTable);
+        copied = true;
+      }
+    } catch (e) {
+      console.warn('Navigator clipboard API failed, attempting fallback', e);
+    }
+
+    if (!copied) {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = markdownTable;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-999999px';
+        textarea.style.top = '-999999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+      } catch (e) {
+        console.error('Fallback clipboard copy failed', e);
+      }
+    }
+
+    setShowExportMenu(false);
+
+    if (copied) {
+      addToast(`Copied Markdown table of ${sortedInventory.length.toLocaleString()} filtered files to clipboard!`, 'success');
+    } else {
+      addToast('Could not copy to clipboard. Please check browser permissions.', 'error');
+    }
   };
 
 
@@ -1173,23 +1301,46 @@ export default function App() {
   const sortedInventory = useMemo(() => {
     if (!inventory) return [];
     
-    let filtered = [...inventory];
+    let filtered: Array<InventoryRow & { _fuzzyScore?: number; _matchNameIndices?: number[]; _matchPathIndices?: number[] }> = [...inventory];
 
-    // Apply text search filter
+    // Apply text search filter with fuzzy approximate matching & ranking
     if (fileSearch.trim()) {
-      const query = fileSearch.trim().toLowerCase();
-      filtered = filtered.filter(f => {
+      const query = fileSearch.trim();
+      const queryLower = query.toLowerCase();
+      const matched: typeof filtered = [];
+
+      for (const f of filtered) {
         const cat = f.category || getFileCategory(f.file_name, f.extension, f.mime_type);
-        return f.file_name.toLowerCase().includes(query) ||
-          f.relative_path.toLowerCase().includes(query) ||
-          cat.toLowerCase().includes(query) ||
-          (f.extension && f.extension.toLowerCase().includes(query)) ||
-          (f.mime_type && f.mime_type.toLowerCase().includes(query)) ||
-          (f.sha256 && f.sha256.toLowerCase().includes(query));
-      });
+        const match = evaluateFuzzyMatch(f.file_name, f.relative_path, cat, f.extension, query);
+
+        if (match) {
+          matched.push({
+            ...f,
+            _fuzzyScore: match.score,
+            _matchNameIndices: match.nameIndices,
+            _matchPathIndices: match.pathIndices,
+          });
+        } else {
+          // Broad fallback for mime type, hash, or loose substring
+          const mimeMatch = f.mime_type && f.mime_type.toLowerCase().includes(queryLower);
+          const hashMatch = f.sha256 && f.sha256.toLowerCase().includes(queryLower);
+          if (mimeMatch || hashMatch) {
+            matched.push({
+              ...f,
+              _fuzzyScore: 0.4,
+            });
+          }
+        }
+      }
+      filtered = matched;
     }
 
-    // Apply date filters
+    // Apply file modification date age bracket filter
+    if (selectedAgeBracket) {
+      filtered = filtered.filter(f => getFileAgeBracket(f.modified_utc) === selectedAgeBracket);
+    }
+
+    // Apply date range filters
     if (dateStart) {
       const start = new Date(dateStart).getTime();
       filtered = filtered.filter(f => new Date(f.modified_utc).getTime() >= start);
@@ -1237,6 +1388,15 @@ export default function App() {
     }
     
     return filtered.sort((a, b) => {
+      // When fuzzy search is active, prioritize match closeness unless user explicitly selected a non-path sort
+      if (fileSearch.trim() && sortField === 'file_name') {
+        const scoreA = a._fuzzyScore ?? 0;
+        const scoreB = b._fuzzyScore ?? 0;
+        if (Math.abs(scoreB - scoreA) > 0.05) {
+          return scoreB - scoreA;
+        }
+      }
+
       let valA: any = sortField === 'category'
         ? (a.category || getFileCategory(a.file_name, a.extension, a.mime_type))
         : (a[sortField] || '');
@@ -1248,14 +1408,14 @@ export default function App() {
       if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [inventory, sortField, sortOrder, dateStart, dateEnd, fileSearch, categoryFilters, extensionFilters, mimeTypeFilters, filterOnlyDuplicates, duplicates, codeFilesOnly]);
+  }, [inventory, sortField, sortOrder, dateStart, dateEnd, fileSearch, selectedAgeBracket, categoryFilters, extensionFilters, mimeTypeFilters, filterOnlyDuplicates, duplicates, codeFilesOnly]);
 
   const totalPages = Math.max(1, Math.ceil(sortedInventory.length / pageSize));
 
   // Reset page to 1 when search, filters, sorting, or page size changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [fileSearch, dateStart, dateEnd, categoryFilters, extensionFilters, mimeTypeFilters, sortField, sortOrder, pageSize]);
+  }, [fileSearch, selectedAgeBracket, dateStart, dateEnd, categoryFilters, extensionFilters, mimeTypeFilters, sortField, sortOrder, pageSize]);
 
   // Keep page within bounds
   useEffect(() => {
@@ -1265,6 +1425,53 @@ export default function App() {
   }, [totalPages, currentPage]);
 
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const shouldReduceMotion = useReducedMotion();
+
+  // Staggered entrance animation epoch tracking for file inventory table
+  const [tableAnimationEpoch, setTableAnimationEpoch] = useState<number>(0);
+  const tableAnimationTimeRef = useRef<number>(Date.now());
+  const lastTableFilterHashRef = useRef<string>('');
+
+  const tableFilterHash = useMemo(() => {
+    return [
+      inventory ? inventory.length : 0,
+      sortedInventory.length,
+      fileSearch,
+      selectedAgeBracket || '',
+      dateStart || '',
+      dateEnd || '',
+      Array.from(categoryFilters).sort().join(','),
+      Array.from(extensionFilters).sort().join(','),
+      Array.from(mimeTypeFilters).sort().join(','),
+      codeFilesOnly ? '1' : '0',
+      filterOnlyDuplicates ? '1' : '0',
+      sortField,
+      sortOrder
+    ].join('|');
+  }, [
+    inventory,
+    sortedInventory.length,
+    fileSearch,
+    selectedAgeBracket,
+    dateStart,
+    dateEnd,
+    categoryFilters,
+    extensionFilters,
+    mimeTypeFilters,
+    codeFilesOnly,
+    filterOnlyDuplicates,
+    sortField,
+    sortOrder
+  ]);
+
+  useEffect(() => {
+    if (lastTableFilterHashRef.current !== tableFilterHash) {
+      lastTableFilterHashRef.current = tableFilterHash;
+      tableAnimationTimeRef.current = Date.now();
+      setTableAnimationEpoch(prev => prev + 1);
+      tableContainerRef.current?.scrollTo({ top: 0 });
+    }
+  }, [tableFilterHash]);
   
   const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
 
@@ -1634,6 +1841,13 @@ export default function App() {
       perform: () => setShowExportOptionsModal(true),
     },
     {
+      id: 'copy-markdown-table',
+      title: 'Copy as Markdown Table (Filtered)',
+      category: 'Export',
+      icon: <Table className="w-4 h-4 text-indigo-400" />,
+      perform: copyAsMarkdownTable,
+    },
+    {
       id: 'download-hashes-txt',
       title: 'Download Filtered Hashes (TXT)',
       category: 'Export',
@@ -1689,6 +1903,40 @@ export default function App() {
       category: 'View',
       icon: <Settings className="w-4 h-4" />,
       perform: () => setShowSettingsModal(true),
+    },
+    {
+      id: 'filter-recent-files',
+      title: 'Filter: Recent Files (< 30 days)',
+      category: 'Actions',
+      icon: <Clock className="w-4 h-4 text-emerald-400" />,
+      perform: () => {
+        setSelectedAgeBracket('recent');
+        setDesktopModule('files');
+        setMobileTab('files');
+        addToast('Filtered to Recent files (< 30 days)', 'info');
+      },
+    },
+    {
+      id: 'filter-stale-files',
+      title: 'Filter: Stale / Obsolete Files (> 1 year)',
+      category: 'Actions',
+      icon: <Clock className="w-4 h-4 text-rose-400" />,
+      perform: () => {
+        setSelectedAgeBracket('stale');
+        setDesktopModule('files');
+        setMobileTab('files');
+        addToast('Filtered to Stale files (> 1 year)', 'info');
+      },
+    },
+    {
+      id: 'clear-date-filter',
+      title: 'Clear Date Age Filter',
+      category: 'Actions',
+      icon: <Clock className="w-4 h-4" />,
+      perform: () => {
+        setSelectedAgeBracket(null);
+        addToast('Cleared date age filter', 'info');
+      },
     },
     {
       id: 'reset-workspace',
@@ -2067,26 +2315,40 @@ export default function App() {
                     Exports <ChevronDown className="w-3 h-3 text-zinc-500" />
                   </button>
                   {showExportMenu && (
-                  <div className="absolute top-full left-0 w-full mt-2 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl py-1 z-30 animate-in fade-in zoom-in-95">
-                    <button onClick={() => downloadCSV('filtered')} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
-                      Download inventory.csv
-                    </button>
-                    <button onClick={downloadJSON} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
-                      Download duplicates.json
-                    </button>
-                    <button onClick={downloadFilteredJSON} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
-                      Export Filtered View (JSON)
-                    </button>
-                    <button onClick={exportPDF} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
-                      Export PDF Report
-                    </button>
-                    <button onClick={downloadSummary} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
-                      Download Summary (TXT)
-                    </button>
-                    <button onClick={downloadHashesTXT} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
-                      Download Hashes (TXT)
-                    </button>
-                  </div>
+                    <>
+                      <div className="fixed inset-0 z-20" onClick={() => setShowExportMenu(false)} />
+                      <div className="absolute top-full left-0 min-w-[230px] w-full sm:w-60 mt-2 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl py-1 z-30 animate-in fade-in zoom-in-95">
+                        <button 
+                          onClick={copyAsMarkdownTable} 
+                          className="w-full text-left px-4 py-2.5 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors flex items-center justify-between group"
+                        >
+                          <span className="flex items-center gap-2 font-medium">
+                            <Table className="w-4 h-4 text-indigo-400" />
+                            Copy as Markdown Table
+                          </span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 group-hover:bg-zinc-700">MD</span>
+                        </button>
+                        <div className="h-px bg-zinc-800 my-1" />
+                        <button onClick={() => { downloadCSV('filtered'); setShowExportMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
+                          Download inventory.csv
+                        </button>
+                        <button onClick={() => { downloadJSON(); setShowExportMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
+                          Download duplicates.json
+                        </button>
+                        <button onClick={() => { downloadFilteredJSON(); setShowExportMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
+                          Export Filtered View (JSON)
+                        </button>
+                        <button onClick={() => { exportPDF(); setShowExportMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
+                          Export PDF Report
+                        </button>
+                        <button onClick={() => { downloadSummary(); setShowExportMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
+                          Download Summary (TXT)
+                        </button>
+                        <button onClick={() => { downloadHashesTXT(); setShowExportMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
+                          Download Hashes (TXT)
+                        </button>
+                      </div>
+                    </>
                   )}
                 </div>
                 <button
@@ -2181,6 +2443,27 @@ export default function App() {
               )}
 
               <div id="charts-container" className="grid grid-cols-1 lg:grid-cols-2 gap-6 bg-zinc-950 p-2 -mx-2 rounded-xl">
+                {/* File Modification Date Distribution Histogram */}
+                <div className="lg:col-span-2">
+                  <ModificationDateChart
+                    inventory={inventory || []}
+                    selectedAgeBracket={selectedAgeBracket}
+                    onSelectAgeBracket={(bracketId) => {
+                      setSelectedAgeBracket(bracketId);
+                      if (bracketId) {
+                        const bracket = AGE_BRACKETS.find(b => b.id === bracketId);
+                        addToast(`Filtered inventory to ${bracket?.label || bracketId}`, 'info');
+                      } else {
+                        addToast('Cleared date modification filter', 'info');
+                      }
+                    }}
+                    onNavigateToExplorer={() => {
+                      setDesktopModule('files');
+                      setMobileTab('files');
+                    }}
+                  />
+                </div>
+
                 <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
                   <h3 className="text-sm font-medium text-zinc-200 mb-6">File Extension Distribution</h3>
                   <div className="h-64">
@@ -2549,26 +2832,88 @@ export default function App() {
                     
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
                       <div className="flex flex-col gap-1 w-full md:w-auto">
-                        <div className="relative flex-1 md:w-56">
+                        <div className="relative flex-1 md:w-64">
                           <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
                           <input 
                             id="searchInput"
                             type="text" 
-                            placeholder="Filter files or paths..." 
-                            value={fileSearch}
-                            onChange={e => setFileSearch(e.target.value)}
-                            className="bg-zinc-950 border border-zinc-800 text-zinc-200 text-sm rounded-lg pl-9 pr-8 py-1.5 focus:outline-none focus:border-indigo-500 w-full"
+                            placeholder="Fuzzy search files, paths, types..." 
+                            value={fileSearchInput}
+                            onChange={e => setFileSearchInput(e.target.value)}
+                            className="bg-zinc-950 border border-zinc-800 text-zinc-200 text-sm rounded-lg pl-9 pr-14 py-1.5 focus:outline-none focus:border-indigo-500 w-full"
                           />
-                          {fileSearch && (
-                            <button 
-                              onClick={() => setFileSearch('')}
-                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                            {isSearchDebouncing && (
+                              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-ping" title="Applying 150ms debounce" />
+                            )}
+                            {fileSearchInput && (
+                              <button 
+                                onClick={() => handleSetSearch('')}
+                                className="text-zinc-500 hover:text-zinc-300 p-0.5 rounded"
+                                title="Clear search"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        {fileSearch.includes('/') && <Breadcrumbs path={fileSearch} onNavigate={setFileSearch} />}
+                        {fileSearch.includes('/') && <Breadcrumbs path={fileSearch} onNavigate={handleSetSearch} />}
+                      </div>
+
+                      {/* Age Bracket Filter Menu */}
+                      <div className="relative">
+                        <button
+                          onClick={() => {
+                            setShowAgeMenu(!showAgeMenu);
+                            setShowCategoryMenu(false);
+                            setShowExtMenu(false);
+                            setShowMimeMenu(false);
+                            setShowSortMenu(false);
+                            setShowColumnMenu(false);
+                          }}
+                          className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border transition-colors ${
+                            selectedAgeBracket 
+                              ? 'bg-indigo-600/20 text-indigo-300 border-indigo-500/30 font-medium' 
+                              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-zinc-700'
+                          }`}
+                        >
+                          <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Age {selectedAgeBracket && `(1)`}</span>
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                        {showAgeMenu && (
+                          <div className="absolute right-0 mt-2 w-64 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl z-30 py-1">
+                            <div className="px-3 py-1.5 border-b border-zinc-800 flex items-center justify-between text-xs text-zinc-400">
+                              <span>Filter by Modification Age</span>
+                              {selectedAgeBracket && (
+                                <button
+                                  onClick={() => setSelectedAgeBracket(null)}
+                                  className="text-indigo-400 hover:text-indigo-300"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                            {AGE_BRACKETS.map(bracket => (
+                              <button
+                                key={bracket.id}
+                                onClick={() => {
+                                  setSelectedAgeBracket(selectedAgeBracket === bracket.id ? null : bracket.id);
+                                  setShowAgeMenu(false);
+                                }}
+                                className={`w-full flex items-center justify-between px-4 py-2 hover:bg-zinc-800/70 text-left text-sm transition-colors ${
+                                  selectedAgeBracket === bracket.id ? 'bg-indigo-500/10 text-indigo-200' : 'text-zinc-300'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: bracket.color }} />
+                                  <span>{bracket.label}</span>
+                                </div>
+                                {selectedAgeBracket === bracket.id && <Check className="w-3.5 h-3.5 text-indigo-400" />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
 
                       {/* Category Filter Menu */}
@@ -2850,10 +3195,46 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Active Category Filters Bar */}
-                  {categoryFilters.size > 0 && (
+                  {/* Active Filter Chips Bar */}
+                  {(categoryFilters.size > 0 || selectedAgeBracket || fileSearch.trim() || dateStart || dateEnd) && (
                     <div className="px-6 py-2 bg-zinc-900/40 border-b border-zinc-800/80 flex items-center gap-2 flex-wrap text-xs">
-                      <span className="text-zinc-500 font-medium">Category:</span>
+                      <span className="text-zinc-500 font-medium">Active Filters:</span>
+
+                      {selectedAgeBracket && (() => {
+                        const bracket = AGE_BRACKETS.find(b => b.id === selectedAgeBracket);
+                        return (
+                          <span 
+                            className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 rounded-full font-medium border bg-indigo-500/10 text-indigo-300 border-indigo-500/30"
+                          >
+                            <Clock className="w-3 h-3 text-indigo-400" />
+                            Age: {bracket?.label || selectedAgeBracket}
+                            <button
+                              onClick={() => setSelectedAgeBracket(null)}
+                              className="p-0.5 rounded-full hover:bg-zinc-800/60 transition-colors ml-0.5"
+                              title="Remove age filter"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        );
+                      })()}
+
+                      {fileSearch.trim() && (
+                        <span 
+                          className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 rounded-full font-medium border bg-zinc-800 text-zinc-300 border-zinc-700"
+                        >
+                          <Search className="w-3 h-3 text-zinc-400" />
+                          Fuzzy: "{fileSearch.trim()}"
+                          <button
+                            onClick={() => handleSetSearch('')}
+                            className="p-0.5 rounded-full hover:bg-zinc-700 transition-colors ml-0.5"
+                            title="Clear search"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      )}
+
                       {Array.from(categoryFilters).map(cat => {
                         const style = CATEGORY_STYLES[cat] || CATEGORY_STYLES['Other'];
                         return (
@@ -2877,11 +3258,18 @@ export default function App() {
                           </span>
                         );
                       })}
+
                       <button
-                        onClick={() => setCategoryFilters(new Set())}
+                        onClick={() => {
+                          setCategoryFilters(new Set());
+                          setSelectedAgeBracket(null);
+                          handleSetSearch('');
+                          setDateStart('');
+                          setDateEnd('');
+                        }}
                         className="text-zinc-400 hover:text-zinc-200 underline ml-2"
                       >
-                        Clear all categories
+                        Reset all filters
                       </button>
                     </div>
                   )}
@@ -2976,10 +3364,27 @@ export default function App() {
                               if (!file) return null;
                               const isDuplicate = highlightDuplicates && duplicates.some(d => d.sha256 === file.sha256);
                               const isFocused = virtualRow.index === focusedRowIndex;
+
+                              const firstVisibleIndex = virtualizer.getVirtualItems()[0]?.index ?? 0;
+                              const staggerIndex = Math.max(0, virtualRow.index - firstVisibleIndex);
+                              const isInitialStagger = !shouldReduceMotion && (Date.now() - tableAnimationTimeRef.current < 900);
+                              const staggerDelay = isInitialStagger ? Math.min(staggerIndex, 14) * 0.035 : 0;
+
                               return (
-                              <tr 
-                                key={`${file.sha256}-${file.relative_path}`} 
-                                className={`group relative animate-in fade-in duration-300 transition-all hover:-translate-y-[1px] hover:shadow-lg hover:z-10 cursor-pointer ${isDuplicate ? 'bg-rose-500/10 hover:bg-rose-500/20' : 'hover:bg-zinc-800/30'} ${isFocused ? 'ring-2 ring-inset ring-indigo-500 bg-indigo-500/10' : ''}`}
+                              <motion.tr 
+                                key={`inv-row-${tableAnimationEpoch}-${file.sha256 || 'nohash'}-${file.relative_path}`} 
+                                initial={shouldReduceMotion ? false : { opacity: 0, y: 10 }}
+                                animate={shouldReduceMotion ? undefined : { 
+                                  opacity: 1, 
+                                  y: 0,
+                                  transitionEnd: { transform: 'none' }
+                                }}
+                                transition={shouldReduceMotion ? undefined : {
+                                  duration: 0.26,
+                                  delay: staggerDelay,
+                                  ease: [0.16, 1, 0.3, 1]
+                                }}
+                                className={`group relative duration-200 transition-colors hover:shadow-lg hover:z-10 cursor-pointer ${isDuplicate ? 'bg-rose-500/10 hover:bg-rose-500/20' : 'hover:bg-zinc-800/30'} ${isFocused ? 'ring-2 ring-inset ring-indigo-500 bg-indigo-500/10' : ''}`}
                                 onClick={() => {
                                   setSelectedFileDetails(file);
                                   setIsRenaming(false);
@@ -3007,7 +3412,21 @@ export default function App() {
                                   <td className={`px-4 py-3 max-w-[200px] md:max-w-[400px] sticky z-20 shadow-[1px_0_0_#27272a,5px_0_15px_-3px_rgba(0,0,0,0.5)] ${isDuplicate ? 'bg-[#1a0f14] group-hover:bg-[#2a141d]' : 'bg-zinc-950 group-hover:bg-zinc-900'}`} style={{ left: columns.thumbnail ? 110 : 50 }}>
                                     <div className="flex items-center justify-between gap-2">
                                       <div className="flex items-center gap-2 truncate" title={file.relative_path}>
-                                        <span className="truncate"><HighlightText text={file.relative_path} query={fileSearch} /></span>
+                                        <span className="truncate">
+                                          <HighlightText 
+                                            text={file.relative_path} 
+                                            query={fileSearch} 
+                                            indices={(file as any)._matchPathIndices} 
+                                          />
+                                        </span>
+                                        {(file as any)._fuzzyScore && fileSearch.trim() && (file as any)._fuzzyScore < 0.95 && (
+                                          <span 
+                                            className="shrink-0 text-[10px] px-1 py-0.2 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-mono"
+                                            title={`Fuzzy Match Score: ${Math.round((file as any)._fuzzyScore * 100)}%`}
+                                          >
+                                            ~{Math.round((file as any)._fuzzyScore * 100)}%
+                                          </span>
+                                        )}
                                         {file.error && (
                                           <span 
                                             className="shrink-0 bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 cursor-help"
@@ -3184,7 +3603,7 @@ export default function App() {
                                     </div>
                                   )}
                                 </td>
-                              </tr>
+                              </motion.tr>
                               );
                             })}
                             {virtualizer.getVirtualItems().length > 0 && (
@@ -3194,11 +3613,15 @@ export default function App() {
                             )}
                           </>
                         ) : (
-                          <tr>
+                          <motion.tr
+                            initial={shouldReduceMotion ? false : { opacity: 0 }}
+                            animate={shouldReduceMotion ? undefined : { opacity: 1 }}
+                            transition={{ duration: 0.2 }}
+                          >
                             <td colSpan={11} className="px-6 py-12 text-center text-zinc-500 text-sm">
                               No files match your search criteria.
                             </td>
-                          </tr>
+                          </motion.tr>
                         )}
                       </tbody>
                     </table>
@@ -3252,6 +3675,19 @@ export default function App() {
                     <div>
                       <div className="text-sm font-medium text-zinc-200">Hashes (TXT)</div>
                       <div className="text-xs text-zinc-500">Export filtered SHA-256 list</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={copyAsMarkdownTable}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 shrink-0">
+                      <Table className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">Copy as Markdown Table</div>
+                      <div className="text-xs text-zinc-500">Formatted Markdown of filtered files</div>
                     </div>
                   </button>
 
@@ -3378,6 +3814,7 @@ export default function App() {
           onAdvancedExport={() => setShowExportOptionsModal(true)}
           onDownloadHashes={downloadHashesTXT}
           onDownloadCSV={() => downloadCSV('filtered')}
+          onCopyMarkdownTable={copyAsMarkdownTable}
           onDownloadJSON={downloadJSON}
           onDownloadPDF={exportPDF}
           onDownloadSummary={downloadSummary}
@@ -4329,6 +4766,73 @@ export default function App() {
           confirmText={confirmAction.confirmText}
           onConfirm={confirmAction.onConfirm}
           onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
+      {/* Automated Ignore Pattern Suggestions Modal */}
+      {showIgnoreModal && preScanResult && (
+        <IgnorePatternModal
+          isOpen={showIgnoreModal}
+          preScanResult={preScanResult}
+          initialConfig={ignoreConfig}
+          onConfirm={(selectedPatterns, rememberChoice) => {
+            const rawCandidates = pendingFilesRef.current;
+            if (!rawCandidates) {
+              setShowIgnoreModal(false);
+              return;
+            }
+
+            const candidateList: File[] = Array.from(rawCandidates as any);
+            const filteredFiles: File[] = [];
+            let excludedCount = 0;
+
+            for (const file of candidateList) {
+              const path = file.webkitRelativePath || file.name;
+              let shouldIgnore = false;
+              for (const pat of selectedPatterns) {
+                if (matchesPathPattern(path, pat)) {
+                  shouldIgnore = true;
+                  break;
+                }
+              }
+
+              if (shouldIgnore) {
+                excludedCount++;
+              } else {
+                filteredFiles.push(file);
+              }
+            }
+
+            setShowIgnoreModal(false);
+            if (rememberChoice) {
+              const updatedConfig = {
+                ...ignoreConfig,
+                rememberChoice: true,
+                enabledPatterns: Array.from(new Set([...ignoreConfig.enabledPatterns, ...selectedPatterns])),
+              };
+              setIgnoreConfig(updatedConfig);
+              saveStoredIgnoreConfig(updatedConfig);
+            }
+
+            if (excludedCount > 0) {
+              addToast(`Excluded ${excludedCount.toLocaleString()} files matching ignore rules. Indexing ${filteredFiles.length.toLocaleString()} files.`, 'info');
+            }
+
+            processFiles(filteredFiles);
+          }}
+          onSkip={() => {
+            setShowIgnoreModal(false);
+            if (pendingFilesRef.current) {
+              processFiles(pendingFilesRef.current);
+            }
+          }}
+          onCancel={() => {
+            setShowIgnoreModal(false);
+            pendingFilesRef.current = null;
+            if (fileInputRef.current) {
+              fileInputRef.current.value = '';
+            }
+          }}
         />
       )}
 

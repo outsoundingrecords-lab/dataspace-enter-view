@@ -16,7 +16,8 @@ import {
   ShieldCheck, 
   RotateCcw,
   Layers,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Table
 } from 'lucide-react';
 import { FileRecord } from '../types';
 import { formatBytes, getFileCategory, CATEGORY_STYLES } from '../utils';
@@ -30,6 +31,7 @@ interface InspectorPanelProps {
   onAdvancedExport: () => void;
   onDownloadHashes: () => void;
   onDownloadCSV: () => void;
+  onCopyMarkdownTable?: () => void;
   onDownloadJSON: () => void;
   onDownloadPDF: () => void;
   onDownloadSummary: () => void;
@@ -52,6 +54,7 @@ export function InspectorPanel({
   onAdvancedExport,
   onDownloadHashes,
   onDownloadCSV,
+  onCopyMarkdownTable,
   onDownloadJSON,
   onDownloadPDF,
   onDownloadSummary,
@@ -280,6 +283,19 @@ export function InspectorPanel({
                 <span className="text-[10px] text-zinc-500">One SHA-256 hash per line</span>
               </div>
             </button>
+
+            {onCopyMarkdownTable && (
+              <button
+                onClick={onCopyMarkdownTable}
+                className="w-full flex items-center gap-3 p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800/80 border border-zinc-800 text-zinc-300 text-xs font-medium transition-colors"
+              >
+                <Table className="w-4 h-4 text-indigo-400 shrink-0" />
+                <div className="flex flex-col text-left">
+                  <span>Copy as Markdown Table</span>
+                  <span className="text-[10px] text-zinc-500">Filtered inventory formatted for markdown</span>
+                </div>
+              </button>
+            )}
 
             <div className="grid grid-cols-2 gap-2 pt-1">
               <button

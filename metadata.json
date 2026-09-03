@@ -1,6 +1,6 @@
 {
   "name": "Copy of Remix Hybrid ProtoBuild",
-  "description": "Research, plan, and build prototype models for the next phase of hybrid system development.",
+  "description": "High-performance file inventory, duplicate detection, workspace analytics with modification date distribution charts, automated ignore patterns, and fuzzy search.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
