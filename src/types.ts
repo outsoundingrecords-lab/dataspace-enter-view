@@ -12,6 +12,8 @@ export interface InventoryRow {
   permissions?: string;
 }
 
+export type FileRecord = InventoryRow;
+
 export interface DuplicateGroup {
   sha256: string;
   size_bytes: number;

@@ -39,6 +39,20 @@ import {
   FolderOpen,
   Settings,
   ArrowRightLeft,
+  Command,
+  PanelRight,
+  PanelRightClose,
+  PanelRightOpen,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ShieldCheck,
+  Layers,
+  Smartphone,
+  Monitor,
+  Menu,
+  LayoutDashboard,
+  FolderTree,
+  FileText
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, Legend,
@@ -50,7 +64,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { toPng } from 'html-to-image';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { InventoryRow, DuplicateGroup } from './types';
+import { InventoryRow, DuplicateGroup, FileRecord } from './types';
 import { DirectoryTree } from './components/DirectoryTree';
 import { CountUp } from './components/CountUp';
 import { Thumbnail } from './components/Thumbnail';
@@ -62,6 +76,11 @@ import { FilePreview } from './components/FilePreview';
 import { FileComparisonModal } from './components/FileComparisonModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { DependencyMap } from './components/DependencyMap';
+import { CommandPalette, CommandItem } from './components/CommandPalette';
+import { MobileBottomDock, MobileTab } from './components/MobileBottomDock';
+import { DesktopSidebar, DesktopNavModule } from './components/DesktopSidebar';
+import { InspectorPanel } from './components/InspectorPanel';
+import { GovernanceAuditModal } from './components/GovernanceAuditModal';
 import { formatBytes } from './utils';
 
 export default function App() {
@@ -154,26 +173,46 @@ export default function App() {
     }
   }, [columns]);
 
-  // Global Keyboard Shortcuts
+  // Unified Responsive UI Redesign States
+  const [mobileTab, setMobileTab] = useState<MobileTab>('overview');
+  const [desktopModule, setDesktopModule] = useState<DesktopNavModule>('overview');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [showGovernanceModal, setShowGovernanceModal] = useState(false);
+  const [mobileShowTree, setMobileShowTree] = useState(false);
+
+  // Global Keyboard Shortcuts & Command Integration
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl + / for search
-      if (e.ctrlKey && e.key === '/') {
+      // Ctrl/Cmd + / for search
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
         e.preventDefault();
         document.getElementById('searchInput')?.focus();
       }
-      if (e.ctrlKey && (e.key === 'd' || e.key === 'D')) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault();
         setShowCleanupModal(true);
         setCleanupStep(0);
       }
-      if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'e' || e.key === 'E')) {
         e.preventDefault();
         setShowExportOptionsModal(true);
       }
-      if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
+      // Persistent Command Palette: Cmd/Ctrl + K
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        setShowShortcutsModal(true);
+        setShowCommandPalette(true);
+      }
+      // Toggle Inspector: Cmd/Ctrl + I
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault();
+        setIsInspectorOpen(prev => !prev);
+      }
+      // Toggle Sidebar: Cmd/Ctrl + B
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        setIsSidebarCollapsed(prev => !prev);
       }
       // Esc to close modals
       if (e.key === 'Escape') {
@@ -186,6 +225,8 @@ export default function App() {
         setShowExportOptionsModal(false);
         setShowSettingsModal(false);
         setShowShortcutsModal(false);
+        setShowCommandPalette(false);
+        setShowGovernanceModal(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1465,78 +1506,293 @@ export default function App() {
 
   const COLORS = ['#6366f1', '#8b5cf6', '#d946ef', '#f43f5e', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#64748b'];
 
+  const commandPaletteItems: CommandItem[] = [
+    {
+      id: 'select-folder',
+      title: 'Select Folder to Inventory',
+      category: 'Actions',
+      icon: <FolderSearch className="w-4 h-4" />,
+      shortcut: 'Ctrl+O',
+      perform: () => fileInputRef.current?.click(),
+    },
+    {
+      id: 'view-overview',
+      title: 'Go to Workspace Overview',
+      category: 'Navigation',
+      icon: <LayoutDashboard className="w-4 h-4" />,
+      perform: () => {
+        setDesktopModule('overview');
+        setMobileTab('overview');
+      },
+    },
+    {
+      id: 'view-files',
+      title: 'Go to File Explorer',
+      category: 'Navigation',
+      icon: <FolderTree className="w-4 h-4" />,
+      perform: () => {
+        setDesktopModule('files');
+        setMobileTab('files');
+      },
+    },
+    {
+      id: 'view-duplicates',
+      title: 'Go to Duplicate Resolution',
+      category: 'Navigation',
+      icon: <Copy className="w-4 h-4" />,
+      shortcut: 'Ctrl+D',
+      perform: () => {
+        setDesktopModule('duplicates');
+        setMobileTab('duplicates');
+      },
+    },
+    {
+      id: 'view-insights',
+      title: 'Go to Insights & Charts',
+      category: 'Navigation',
+      icon: <PieChart className="w-4 h-4" />,
+      perform: () => {
+        setDesktopModule('insights');
+        setMobileTab('insights');
+      },
+    },
+    {
+      id: 'view-deps',
+      title: 'Go to Dependency Map',
+      category: 'Navigation',
+      icon: <GitCompare className="w-4 h-4" />,
+      perform: () => {
+        setViewMode('deps');
+        setDesktopModule('deps');
+      },
+    },
+    {
+      id: 'advanced-export',
+      title: 'Open Advanced Export Menu',
+      category: 'Export',
+      icon: <Download className="w-4 h-4" />,
+      shortcut: 'Ctrl+E',
+      perform: () => setShowExportOptionsModal(true),
+    },
+    {
+      id: 'download-hashes-txt',
+      title: 'Download Filtered Hashes (TXT)',
+      category: 'Export',
+      icon: <FileText className="w-4 h-4" />,
+      perform: downloadHashesTXT,
+    },
+    {
+      id: 'download-csv',
+      title: 'Download inventory.csv',
+      category: 'Export',
+      icon: <FileSpreadsheet className="w-4 h-4" />,
+      perform: () => downloadCSV('filtered'),
+    },
+    {
+      id: 'download-json',
+      title: 'Download duplicates.json',
+      category: 'Export',
+      icon: <FileJson className="w-4 h-4" />,
+      perform: downloadJSON,
+    },
+    {
+      id: 'batch-validate',
+      title: 'Validate File Hashes',
+      category: 'Actions',
+      icon: <AlertTriangle className="w-4 h-4" />,
+      perform: handleBatchValidate,
+    },
+    {
+      id: 'ai-organize',
+      title: 'Run AI Organize Suggestion',
+      category: 'Actions',
+      icon: <Wand2 className="w-4 h-4" />,
+      perform: handleAiOrganize,
+    },
+    {
+      id: 'toggle-inspector',
+      title: 'Toggle Inspector & Action Panel',
+      category: 'View',
+      icon: <PanelRightClose className="w-4 h-4" />,
+      shortcut: 'Ctrl+I',
+      perform: () => setIsInspectorOpen(prev => !prev),
+    },
+    {
+      id: 'governance-audit',
+      title: 'Operational Governance & Sign-Off Matrix',
+      category: 'View',
+      icon: <ShieldCheck className="w-4 h-4" />,
+      perform: () => setShowGovernanceModal(true),
+    },
+    {
+      id: 'open-settings',
+      title: 'Workspace Settings',
+      category: 'View',
+      icon: <Settings className="w-4 h-4" />,
+      perform: () => setShowSettingsModal(true),
+    },
+    {
+      id: 'reset-workspace',
+      title: 'Reset Workspace',
+      category: 'Actions',
+      icon: <RefreshCw className="w-4 h-4" />,
+      perform: handleRefresh,
+    }
+  ];
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-300 font-sans selection:bg-indigo-500/30">
-      <div className="max-w-6xl mx-auto px-6 py-12">
-        <header className="mb-12 border-b border-zinc-800/50 pb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-indigo-500/10 rounded-lg">
-              <Database className="w-6 h-6 text-indigo-400" />
-            </div>
-            <h1 className="text-2xl font-medium text-zinc-100 tracking-tight">
-              Structure Architecture
-            </h1>
+    <div className="h-[100dvh] min-h-[100dvh] flex flex-col bg-zinc-950 text-zinc-300 font-sans selection:bg-indigo-500/30 overflow-hidden app-viewport">
+      {/* Universal Responsive Top Navigation Bar */}
+      <header className="h-14 sm:h-16 border-b border-zinc-800/80 bg-zinc-950/95 backdrop-blur-md px-3 sm:px-6 flex items-center justify-between shrink-0 z-30 safe-top-padding">
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="p-2 bg-indigo-500/10 rounded-xl text-indigo-400 shrink-0">
+            <Database className="w-5 h-5" />
           </div>
-          <p className="text-zinc-400 max-w-3xl leading-relaxed text-sm">
-            Turn ambiguous or messy folder structures into maintainable architectures. 
-            Select a directory to generate a deterministic file inventory and identify exact duplicates based on SHA-256 content hashes.
-          </p>
-        </header>
-
-        <main className="space-y-8">
-          {/* Input Area */}
-          <section className="bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-8 flex flex-col items-center justify-center text-center">
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileSelect}
-              className="hidden"
-              // @ts-ignore - webkitdirectory is non-standard but widely supported
-              webkitdirectory=""
-              directory=""
-              multiple
-            />
-            
-            <div className="w-16 h-16 bg-zinc-800/50 rounded-full flex items-center justify-center mb-4 border border-zinc-700/50 shadow-inner">
-              <FolderArchive className="w-8 h-8 text-zinc-400" />
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-zinc-100 text-sm sm:text-base tracking-tight leading-tight">
+                Structure Architecture
+              </span>
+              {inventory && (
+                <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  {inventory.length} Files
+                </span>
+              )}
             </div>
-            
-            <h2 className="text-lg font-medium text-zinc-200 mb-2">Inspect Workspace Directory</h2>
-            <p className="text-zinc-500 text-sm mb-6 max-w-md">
-              Select a local folder to inventory. Processing happens securely in your browser—no files are uploaded to any server.
-            </p>
-            
-              <div className="flex gap-4 mb-4">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={processing}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  {processing ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      Hashing Files...
-                    </>
-                  ) : (
-                    <>
-                      <FolderSearch className="w-4 h-4" />
-                      Select Folder to Inventory
-                    </>
-                  )}
-                </button>
+            <span className="text-[10px] sm:text-xs text-zinc-500 hidden sm:inline">
+              Deterministic Content Inspector & Analytics
+            </span>
+          </div>
+        </div>
 
-                <button
-                  onClick={() => setShowQuickStart(true)}
-                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-6 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 border border-zinc-700"
-                >
-                  <Search className="w-4 h-4 text-zinc-400" />
-                  Quick Start Guide
-                </button>
-              </div>
-          </section>
+        {/* Center: Command Palette Trigger */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowCommandPalette(true)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs transition-colors interactive-element"
+            title="Open Command Palette (Cmd+K)"
+          >
+            <Search className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden md:inline">Search commands & actions...</span>
+            <span className="md:hidden">Search</span>
+            <kbd className="hidden sm:inline text-[10px] font-mono bg-zinc-800 border border-zinc-700 text-zinc-400 px-1.5 py-0.5 rounded ml-1">
+              ⌘K
+            </kbd>
+          </button>
+        </div>
 
+        {/* Right Action Icons & Status */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          <button
+            onClick={() => setShowGovernanceModal(true)}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs font-medium transition-colors"
+            title="Operational Governance Verification Sign-off"
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span className="hidden lg:inline">Audit Sign-off</span>
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={processing}
+            className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-3 sm:px-4 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-all flex items-center gap-1.5 shadow-sm interactive-element disabled:opacity-50"
+          >
+            {processing ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <FolderSearch className="w-3.5 h-3.5" />
+            )}
+            <span className="hidden sm:inline">{processing ? 'Hashing...' : 'Select Folder'}</span>
+          </button>
+
+          {/* Right Inspector Toggle for Desktop */}
+          <button
+            onClick={() => setIsInspectorOpen(prev => !prev)}
+            className={`hidden xl:flex items-center p-2 rounded-xl border transition-colors ${
+              isInspectorOpen
+                ? 'bg-indigo-600/15 border-indigo-500/30 text-indigo-300'
+                : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+            title="Toggle Right Inspector Panel (Ctrl+I)"
+          >
+            {isInspectorOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
+          </button>
+        </div>
+      </header>
+
+      {/* 3-Pane Ergonomic Shell */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Left Desktop Sidebar */}
+        <DesktopSidebar
+          activeModule={desktopModule}
+          onSelectModule={(mod) => {
+            setDesktopModule(mod);
+            if (mod === 'deps') setViewMode('deps');
+            else setViewMode('flat');
+          }}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={() => setIsSidebarCollapsed(prev => !prev)}
+          onSelectFolder={() => fileInputRef.current?.click()}
+          onOpenQuickStart={() => setShowQuickStart(true)}
+          onOpenCompare={() => setShowCompareModal(true)}
+          onBatchValidate={handleBatchValidate}
+          onOpenSettings={() => setShowSettingsModal(true)}
+          onOpenCommandPalette={() => setShowCommandPalette(true)}
+          onOpenGovernance={() => setShowGovernanceModal(true)}
+          totalFiles={inventory ? inventory.length : 0}
+          duplicateCount={duplicates.length}
+          isProcessing={processing}
+        />
+
+        {/* Central Analytics Canvas */}
+        <main className="flex-1 overflow-y-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6 pb-28 lg:pb-8 custom-scrollbar">
+          {/* Hidden File Input always mounted for toolbar/command trigger */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            className="hidden"
+            // @ts-ignore - webkitdirectory is non-standard but widely supported
+            webkitdirectory=""
+            directory=""
+            multiple
+          />
+
+          {/* Initial Input Area when no workspace is active */}
           {!inventory && !processing && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+            <>
+              <section className="bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-8 flex flex-col items-center justify-center text-center">
+                <div className="w-16 h-16 bg-zinc-800/50 rounded-full flex items-center justify-center mb-4 border border-zinc-700/50 shadow-inner">
+                  <FolderArchive className="w-8 h-8 text-zinc-400" />
+                </div>
+                
+                <h2 className="text-lg font-medium text-zinc-200 mb-2">Inspect Workspace Directory</h2>
+                <p className="text-zinc-500 text-sm mb-6 max-w-md">
+                  Select a local folder to inventory. Processing happens securely in your browser—no files are uploaded to any server.
+                </p>
+                
+                <div className="flex flex-wrap justify-center gap-4 mb-4">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={processing}
+                    className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm flex items-center gap-2"
+                  >
+                    <FolderSearch className="w-4 h-4" />
+                    Select Folder to Inventory
+                  </button>
+
+                  <button
+                    onClick={() => setShowQuickStart(true)}
+                    className="bg-zinc-800 hover:bg-zinc-700 active:scale-95 text-zinc-200 px-6 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center gap-2 border border-zinc-700"
+                  >
+                    <Search className="w-4 h-4 text-zinc-400" />
+                    Quick Start Guide
+                  </button>
+                </div>
+              </section>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
               <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-6">
                 <h3 className="text-sm font-medium text-zinc-200 mb-2">Organization Strategy</h3>
                 <p className="text-xs text-zinc-500 leading-relaxed">
@@ -1556,6 +1812,7 @@ export default function App() {
                 </p>
               </div>
             </div>
+            </>
           )}
 
           {/* Progress */}
@@ -1581,28 +1838,36 @@ export default function App() {
           {inventory && !processing && (
             <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
               
-              {/* Navigation Tabs */}
+              {/* Navigation Tabs (Quick View Mode Toggle) */}
               <div className="flex items-center gap-4 border-b border-zinc-800">
                 <button
-                  onClick={() => setViewMode('flat')}
-                  className={`pb-3 text-sm font-medium border-b-2 transition-colors ${viewMode === 'flat' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+                  onClick={() => {
+                    setViewMode('flat');
+                    setDesktopModule('overview');
+                  }}
+                  className={`pb-3 text-sm font-medium border-b-2 transition-colors ${viewMode === 'flat' && desktopModule !== 'deps' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
                 >
                   Workspace Dashboard
                 </button>
                 <button
-                  onClick={() => setViewMode('deps')}
-                  className={`pb-3 text-sm font-medium border-b-2 transition-colors ${viewMode === 'deps' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+                  onClick={() => {
+                    setViewMode('deps');
+                    setDesktopModule('deps');
+                  }}
+                  className={`pb-3 text-sm font-medium border-b-2 transition-colors ${viewMode === 'deps' || desktopModule === 'deps' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
                 >
                   Dependency Map
                 </button>
               </div>
 
-              {viewMode === 'deps' ? (
+              {(viewMode === 'deps' || desktopModule === 'deps') ? (
                 <DependencyMap inventory={inventory} fileObjects={fileObjectsRef.current} />
               ) : (
                 <>
-                  {/* Metrics Grid */}
-                  <div id="stats-container" className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                  {/* Overview Section: Metrics & Action Bar */}
+                  <div className={`${mobileTab === 'overview' ? 'block' : 'hidden'} ${desktopModule === 'overview' ? 'lg:block' : 'lg:hidden'} space-y-6`}>
+                    {/* Metrics Grid */}
+                    <div id="stats-container" className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                     <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-5">
                       <p className="text-sm text-zinc-500 mb-1 font-medium">Total Files</p>
                       <p className="text-2xl text-zinc-100 font-light"><CountUp end={inventory.length} /></p>
@@ -1737,8 +2002,32 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Charts Section */}
-              <div className="flex items-center justify-between mb-4 mt-8">
+              {/* Mobile Duplicates Quick Action Card */}
+              {duplicates.length > 0 && (
+                <div className="lg:hidden p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-rose-300 flex items-center gap-1.5">
+                      <Copy className="w-4 h-4" />
+                      {duplicates.length} Duplicate Groups
+                    </div>
+                    <div className="text-xs text-rose-400/80">
+                      Wasting {formatBytes(duplicateSize)} of disk space
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setMobileTab('duplicates')}
+                    className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium transition-colors"
+                  >
+                    Review
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Charts & Visual Analytics Section */}
+            <div id="charts-container" className={`${mobileTab === 'insights' ? 'block' : 'hidden'} ${(desktopModule === 'insights' || desktopModule === 'overview') ? 'lg:block' : 'lg:hidden'} space-y-6 mt-6`}>
+              {/* Charts Section Header */}
+              <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-medium text-zinc-100 flex items-center gap-2">
                   <Database className="w-5 h-5 text-indigo-400" />
                   Workspace Insights
@@ -1922,7 +2211,10 @@ export default function App() {
                   </div>
                 </div>
               </div>
+            </div>
 
+            {/* Duplicates Resolution Section */}
+            <div className={`${mobileTab === 'duplicates' ? 'block' : 'hidden'} ${(desktopModule === 'duplicates' || desktopModule === 'overview') ? 'lg:block' : 'lg:hidden'} space-y-6 mt-6`}>
               {/* Duplicates List */}
               {duplicates.length > 0 ? (
                 <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden flex flex-col">
@@ -2069,9 +2361,11 @@ export default function App() {
                   <p className="text-zinc-500 text-sm mt-1 max-w-sm">No exact duplicates were found in this directory. The structure is optimal.</p>
                 </div>
               )}
+            </div>
 
-              {/* Full File Inventory Table */}
-              <div className="flex flex-wrap items-center justify-between mt-12 mb-4 gap-4">
+            {/* Full File Inventory Table & Tree Section */}
+            <div className={`${mobileTab === 'files' ? 'block' : 'hidden'} ${(desktopModule === 'files' || desktopModule === 'overview') ? 'lg:block' : 'lg:hidden'} space-y-4 mt-6`}>
+              <div className="flex flex-wrap items-center justify-between gap-4">
                 <h2 className="text-xl font-medium text-zinc-100 flex items-center gap-2">
                   <Folder className="w-5 h-5 text-indigo-400" />
                   File Explorer
@@ -2089,9 +2383,31 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Mobile Segmented Switcher between Tree & Table */}
+              <div className="lg:hidden flex items-center justify-between bg-zinc-900 border border-zinc-800 rounded-xl p-1 mb-2">
+                <button
+                  onClick={() => setMobileShowTree(true)}
+                  className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 min-h-[44px] ${
+                    mobileShowTree ? 'bg-indigo-600 text-white' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <FolderTree className="w-4 h-4" />
+                  Directory Tree
+                </button>
+                <button
+                  onClick={() => setMobileShowTree(false)}
+                  className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 min-h-[44px] ${
+                    !mobileShowTree ? 'bg-indigo-600 text-white' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <FileText className="w-4 h-4" />
+                  File Table ({sortedInventory.length})
+                </button>
+              </div>
+
               <div className="flex flex-col lg:flex-row gap-6 mt-4">
                 {/* Tree Sidebar */}
-                <div className="lg:w-1/3 flex-shrink-0">
+                <div className={`${mobileShowTree ? 'block' : 'hidden'} lg:block lg:w-1/3 flex-shrink-0`}>
                   <DirectoryTree 
                     inventory={inventory} 
                     duplicateHashes={new Set(duplicates.map(d => d.sha256))} 
@@ -2105,7 +2421,7 @@ export default function App() {
                 </div>
 
                 {/* List View */}
-                <div className="lg:w-2/3 flex-grow flex flex-col bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden">
+                <div className={`${!mobileShowTree ? "flex" : "hidden"} lg:flex lg:w-2/3 flex-grow flex-col bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden`}>
                   <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900/80 flex flex-col md:flex-row md:justify-between items-start md:items-center gap-4">
                     <div className="flex items-center gap-3">
                       <h3 className="text-sm font-medium text-zinc-200 flex items-center gap-2">
@@ -2644,12 +2960,191 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              </>
-              )}
+            </div>
+            </>
+            )}
+            {/* Mobile Tools Action Grid (Visible when mobileTab === 'tools' on small screens) */}
+            {mobileTab === 'tools' && (
+              <div className="lg:hidden block space-y-4 animate-in fade-in duration-200">
+                <div className="border-b border-zinc-800 pb-2">
+                  <h3 className="text-sm font-semibold text-zinc-100">Workspace Utility Matrix</h3>
+                  <p className="text-xs text-zinc-500">Fast access to reports, validation, exports, and governance.</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setShowExportOptionsModal(true)}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 shrink-0">
+                      <Download className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">Advanced Export</div>
+                      <div className="text-xs text-zinc-500">Capture visual dashboard as PNG</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={downloadHashesTXT}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 shrink-0">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">Hashes (TXT)</div>
+                      <div className="text-xs text-zinc-500">Export filtered SHA-256 list</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => downloadCSV('filtered')}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400 shrink-0">
+                      <FileSpreadsheet className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">Inventory CSV</div>
+                      <div className="text-xs text-zinc-500">Detailed spreadsheet export</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={downloadJSON}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400 shrink-0">
+                      <FileJson className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">Duplicates JSON</div>
+                      <div className="text-xs text-zinc-500">Structured duplicate clusters</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={exportPDF}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-rose-500/10 text-rose-400 shrink-0">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">PDF Report</div>
+                      <div className="text-xs text-zinc-500">Comprehensive printable summary</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={handleBatchValidate}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400 shrink-0">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">Validate Hashes</div>
+                      <div className="text-xs text-zinc-500">Re-verify cryptographic integrity</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => setShowCompareModal(true)}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 shrink-0">
+                      <GitCompare className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">Compare Workspaces</div>
+                      <div className="text-xs text-zinc-500">Differential snapshot comparison</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => setShowGovernanceModal(true)}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 hover:border-emerald-500/40 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-400 shrink-0">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-emerald-300">Audit Sign-off</div>
+                      <div className="text-xs text-emerald-400/70">Verify UI redesign requirements</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => setShowSettingsModal(true)}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-zinc-800 text-zinc-400 shrink-0">
+                      <Settings className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-zinc-200">Settings</div>
+                      <div className="text-xs text-zinc-500">Workspace & scanning configuration</div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => setShowResetConfirm(true)}
+                    className="flex items-center gap-3 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 hover:border-rose-500/30 text-left min-h-[44px] active:scale-[0.99] transition-all"
+                  >
+                    <div className="p-2 rounded-lg bg-rose-500/20 text-rose-400 shrink-0">
+                      <RefreshCw className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-rose-300">Reset Workspace</div>
+                      <div className="text-xs text-rose-400/70">Clear loaded inventory</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
             </section>
           )}
         </main>
+
+        {/* Right Inspector & Action Panel (Desktop XL+) */}
+        <InspectorPanel
+          isOpen={isInspectorOpen}
+          onToggle={() => setIsInspectorOpen(prev => !prev)}
+          selectedFile={selectedFileDetails}
+          onCloseSelectedFile={() => setSelectedFileDetails(null)}
+          onCopyHash={(hash) => {
+            navigator.clipboard.writeText(hash);
+            addToast('Copied SHA-256 hash to clipboard', 'success');
+          }}
+          onAdvancedExport={() => setShowExportOptionsModal(true)}
+          onDownloadHashes={downloadHashesTXT}
+          onDownloadCSV={() => downloadCSV('filtered')}
+          onDownloadJSON={downloadJSON}
+          onDownloadPDF={exportPDF}
+          onDownloadSummary={downloadSummary}
+          onAiOrganize={handleAiOrganize}
+          isAiLoading={isAiLoading}
+          aiSuggestion={aiSuggestion}
+          cleanupHistory={cleanupHistory}
+          totalFiles={inventory ? inventory.length : 0}
+          totalSize={totalSize}
+          duplicateCount={duplicates.length}
+          onOpenGovernance={() => setShowGovernanceModal(true)}
+        />
       </div>
+
+      {/* Persistent Mobile Bottom Navigation Dock */}
+      <MobileBottomDock
+        activeTab={mobileTab}
+        onSelectTab={(tab) => {
+          setMobileTab(tab);
+        }}
+        duplicateCount={duplicates.length}
+        totalFiles={inventory ? inventory.length : 0}
+        onOpenFolder={() => fileInputRef.current?.click()}
+      />
 
       {/* Quick Start Guide Modal */}
 
@@ -3582,6 +4077,15 @@ export default function App() {
 
       <ToastContainer toasts={toasts} removeToast={removeToast} />
       {showShortcutsModal && <KeyboardShortcutsModal onClose={() => setShowShortcutsModal(false)} />}
+      <CommandPalette
+        isOpen={showCommandPalette}
+        onClose={() => setShowCommandPalette(false)}
+        commands={commandPaletteItems}
+      />
+      <GovernanceAuditModal
+        isOpen={showGovernanceModal}
+        onClose={() => setShowGovernanceModal(false)}
+      />
     </div>
   );
 }

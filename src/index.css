@@ -1,8 +1,70 @@
 @import "tailwindcss";
 
+:root {
+  /* Mobile Hardware Safe Areas */
+  --safe-area-top: env(safe-area-inset-top, 54px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 34px);
+
+  /* Touch Target & Sizing */
+  --min-touch-target: 44px;
+  --mobile-viewport-height: 100dvh;
+
+  /* Color System (Indigo / Slate Palette) */
+  --bg-app-background: #09090b;
+  --bg-surface-white: #18181b;
+  --bg-surface-subtle: #27272a;
+  --border-subtle: #3f3f46;
+
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-accent: #6366f1;
+
+  /* Performance Transitions */
+  --motion-fast-gpu: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 @layer base {
   body {
-    background-color: #09090b;
+    background-color: var(--bg-app-background);
     color: #d4d4d8;
+    min-height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
   }
+}
+
+/* Mobile-Specific Hardware Shell Rules */
+@media (max-width: 768px) {
+  .app-viewport {
+    height: var(--mobile-viewport-height);
+    min-height: var(--mobile-viewport-height);
+    padding-top: var(--safe-area-top);
+    padding-bottom: var(--safe-area-bottom);
+    overflow-x: hidden;
+  }
+
+  .interactive-element {
+    min-width: var(--min-touch-target);
+    min-height: var(--min-touch-target);
+  }
+}
+
+/* 120Hz ProMotion Hardware Acceleration & Transitions */
+.gpu-accelerated {
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Safe area padding utilities */
+.safe-top-padding {
+  padding-top: max(12px, env(safe-area-inset-top, 12px));
+}
+
+.safe-bottom-padding {
+  padding-bottom: max(16px, env(safe-area-inset-bottom, 16px));
+}
+
+.safe-bottom-dock {
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
 }
