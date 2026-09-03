@@ -1,7 +1,10 @@
+export type FileCategory = 'Source Code' | 'Documentation' | 'Configuration' | 'Assets' | 'Other';
+
 export interface InventoryRow {
   relative_path: string;
   file_name: string;
   extension: string;
+  category?: FileCategory;
   size_bytes: number;
   modified_utc: string;
   mime_type: string;
@@ -20,3 +23,4 @@ export interface DuplicateGroup {
   count: number;
   paths: string[];
 }
+

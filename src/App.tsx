@@ -52,7 +52,9 @@ import {
   Menu,
   LayoutDashboard,
   FolderTree,
-  FileText
+  FileText,
+  FileCode,
+  Image as ImageIcon
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, Legend,
@@ -64,7 +66,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { toPng } from 'html-to-image';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { InventoryRow, DuplicateGroup, FileRecord } from './types';
+import { InventoryRow, DuplicateGroup, FileRecord, FileCategory } from './types';
 import { DirectoryTree } from './components/DirectoryTree';
 import { CountUp } from './components/CountUp';
 import { Thumbnail } from './components/Thumbnail';
@@ -81,7 +83,7 @@ import { MobileBottomDock, MobileTab } from './components/MobileBottomDock';
 import { DesktopSidebar, DesktopNavModule } from './components/DesktopSidebar';
 import { InspectorPanel } from './components/InspectorPanel';
 import { GovernanceAuditModal } from './components/GovernanceAuditModal';
-import { formatBytes } from './utils';
+import { formatBytes, getFileCategory, FILE_CATEGORIES, CATEGORY_STYLES } from './utils';
 
 export default function App() {
   const [processing, setProcessing] = useState(false);
@@ -96,6 +98,8 @@ export default function App() {
   const [fileSearch, setFileSearch] = useState<string>('');
   const [dateStart, setDateStart] = useState<string>('');
   const [dateEnd, setDateEnd] = useState<string>('');
+  const [categoryFilters, setCategoryFilters] = useState<Set<FileCategory>>(new Set());
+  const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [extensionFilters, setExtensionFilters] = useState<Set<string>>(new Set());
   const [showExtMenu, setShowExtMenu] = useState(false);
   const [mimeTypeFilters, setMimeTypeFilters] = useState<Set<string>>(new Set());
@@ -143,6 +147,7 @@ export default function App() {
     const defaultCols = {
       thumbnail: true,
       fileName: true,
+      category: true,
       size: true,
       modified: true,
       type: true,
@@ -154,7 +159,8 @@ export default function App() {
       const saved = localStorage.getItem('tableColumns');
       if (saved) {
         try {
-          return { ...defaultCols, ...JSON.parse(saved) };
+          const parsed = JSON.parse(saved);
+          return { ...defaultCols, ...parsed, category: parsed.category ?? true };
         } catch (e) {
           console.error(e);
         }
@@ -266,7 +272,7 @@ export default function App() {
   const [treeSearchTerm, setTreeSearchTerm] = useState('');
   const [selectedTreePath, setSelectedTreePath] = useState('');
   
-  type SortField = 'file_name' | 'size_bytes' | 'modified_utc' | 'sha256';
+  type SortField = 'file_name' | 'size_bytes' | 'modified_utc' | 'sha256' | 'category';
   type SortOrder = 'asc' | 'desc';
   const [filterOnlyDuplicates, setFilterOnlyDuplicates] = useState(false);
   const [activeRowMenu, setActiveRowMenu] = useState<string | null>(null);
@@ -495,6 +501,7 @@ export default function App() {
       
       const extension = file.name.includes('.') ? '.' + file.name.split('.').pop()?.toLowerCase() : '';
       const relativePath = file.webkitRelativePath || file.name;
+      const category = getFileCategory(file.name, extension, file.type);
       
       fileObjectsRef.current.set(relativePath, file);
 
@@ -502,6 +509,7 @@ export default function App() {
         relative_path: relativePath,
         file_name: file.name,
         extension: extension,
+        category: category,
         size_bytes: file.size,
         modified_utc: new Date(file.lastModified).toISOString(),
         mime_type: file.type || '',
@@ -576,11 +584,13 @@ export default function App() {
       
       const extension = file.name.includes('.') ? '.' + file.name.split('.').pop()?.toLowerCase() : '';
       const relativePath = file.webkitRelativePath || file.name;
+      const category = getFileCategory(file.name, extension, file.type);
       
       rows.push({
         relative_path: relativePath,
         file_name: file.name,
         extension: extension,
+        category: category,
         size_bytes: file.size,
         modified_utc: new Date(file.lastModified).toISOString(),
         mime_type: file.type || '',
@@ -706,14 +716,18 @@ export default function App() {
     if (!dataToDownload || dataToDownload.length === 0) return;
     
     const keys: (keyof InventoryRow)[] = [
-      'relative_path', 'file_name', 'extension', 
+      'relative_path', 'file_name', 'category', 'extension', 
       'size_bytes', 'modified_utc', 'mime_type', 'sha256'
     ];
     
     const header = keys.join(',');
     const body = dataToDownload.map(row => {
       return keys.map(k => {
-        let val = row[k] === null || row[k] === undefined ? '' : String(row[k]);
+        let rawVal = row[k];
+        if (k === 'category' && !rawVal) {
+          rawVal = getFileCategory(row.file_name, row.extension, row.mime_type);
+        }
+        let val = rawVal === null || rawVal === undefined ? '' : String(rawVal);
         if (val.includes(',') || val.includes('"') || val.includes('\n')) {
           return `"${val.replace(/"/g, '""')}"`;
         }
@@ -765,11 +779,15 @@ export default function App() {
         const pathParts = file.relative_path.split('/');
         pathParts[pathParts.length - 1] = newName;
         const newRelativePath = pathParts.join('/');
+        const newExt = newName.includes('.') ? '.' + newName.split('.').pop()?.toLowerCase() : '';
+        const updatedCat = getFileCategory(newName, newExt, file.mime_type);
 
         return {
           ...file,
           file_name: newName,
-          relative_path: newRelativePath
+          relative_path: newRelativePath,
+          extension: newExt,
+          category: updatedCat
         };
       }
       return file;
@@ -1056,6 +1074,28 @@ export default function App() {
     ];
   }, [inventory, duplicates]);
 
+  const allCategoryCounts = useMemo(() => {
+    if (!inventory) return [];
+    const counts = new Map<FileCategory, number>();
+    FILE_CATEGORIES.forEach(c => counts.set(c, 0));
+    inventory.forEach(f => {
+      const cat = f.category || getFileCategory(f.file_name, f.extension, f.mime_type);
+      counts.set(cat, (counts.get(cat) || 0) + 1);
+    });
+    return FILE_CATEGORIES.map(name => ({
+      name,
+      count: counts.get(name) || 0
+    }));
+  }, [inventory]);
+
+  const categoryDistributionData = useMemo(() => {
+    if (!inventory) return [];
+    return allCategoryCounts.filter(c => c.count > 0).map(c => ({
+      name: c.name,
+      value: c.count
+    }));
+  }, [inventory, allCategoryCounts]);
+
   const allExtensionCounts = useMemo(() => {
     if (!inventory) return [];
     const counts = new Map<string, number>();
@@ -1138,13 +1178,15 @@ export default function App() {
     // Apply text search filter
     if (fileSearch.trim()) {
       const query = fileSearch.trim().toLowerCase();
-      filtered = filtered.filter(f => 
-        f.file_name.toLowerCase().includes(query) ||
-        f.relative_path.toLowerCase().includes(query) ||
-        (f.extension && f.extension.toLowerCase().includes(query)) ||
-        (f.mime_type && f.mime_type.toLowerCase().includes(query)) ||
-        (f.sha256 && f.sha256.toLowerCase().includes(query))
-      );
+      filtered = filtered.filter(f => {
+        const cat = f.category || getFileCategory(f.file_name, f.extension, f.mime_type);
+        return f.file_name.toLowerCase().includes(query) ||
+          f.relative_path.toLowerCase().includes(query) ||
+          cat.toLowerCase().includes(query) ||
+          (f.extension && f.extension.toLowerCase().includes(query)) ||
+          (f.mime_type && f.mime_type.toLowerCase().includes(query)) ||
+          (f.sha256 && f.sha256.toLowerCase().includes(query));
+      });
     }
 
     // Apply date filters
@@ -1157,6 +1199,14 @@ export default function App() {
       const end = new Date(dateEnd);
       end.setHours(23, 59, 59, 999);
       filtered = filtered.filter(f => new Date(f.modified_utc).getTime() <= end.getTime());
+    }
+
+    // Apply category filters
+    if (categoryFilters.size > 0) {
+      filtered = filtered.filter(f => {
+        const cat = f.category || getFileCategory(f.file_name, f.extension, f.mime_type);
+        return categoryFilters.has(cat);
+      });
     }
 
     // Apply extension filters
@@ -1175,7 +1225,10 @@ export default function App() {
         '.py', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.php', '.rb',
         '.sh', '.yaml', '.yml', '.xml', '.sql'
       ]);
-      filtered = filtered.filter(f => f.extension && codeExtensions.has(f.extension.toLowerCase()));
+      filtered = filtered.filter(f => {
+        const cat = f.category || getFileCategory(f.file_name, f.extension, f.mime_type);
+        return cat === 'Source Code' || (f.extension && codeExtensions.has(f.extension.toLowerCase()));
+      });
     }
 
     if (filterOnlyDuplicates) {
@@ -1184,21 +1237,25 @@ export default function App() {
     }
     
     return filtered.sort((a, b) => {
-      let valA = a[sortField] || '';
-      let valB = b[sortField] || '';
+      let valA: any = sortField === 'category'
+        ? (a.category || getFileCategory(a.file_name, a.extension, a.mime_type))
+        : (a[sortField] || '');
+      let valB: any = sortField === 'category'
+        ? (b.category || getFileCategory(b.file_name, b.extension, b.mime_type))
+        : (b[sortField] || '');
       
       if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
       if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [inventory, sortField, sortOrder, dateStart, dateEnd, fileSearch, extensionFilters, mimeTypeFilters, filterOnlyDuplicates, duplicates, codeFilesOnly]);
+  }, [inventory, sortField, sortOrder, dateStart, dateEnd, fileSearch, categoryFilters, extensionFilters, mimeTypeFilters, filterOnlyDuplicates, duplicates, codeFilesOnly]);
 
   const totalPages = Math.max(1, Math.ceil(sortedInventory.length / pageSize));
 
   // Reset page to 1 when search, filters, sorting, or page size changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [fileSearch, dateStart, dateEnd, extensionFilters, mimeTypeFilters, sortField, sortOrder, pageSize]);
+  }, [fileSearch, dateStart, dateEnd, categoryFilters, extensionFilters, mimeTypeFilters, sortField, sortOrder, pageSize]);
 
   // Keep page within bounds
   useEffect(() => {
@@ -1384,7 +1441,8 @@ export default function App() {
           ...item,
           file_name: newName,
           relative_path: newPath,
-          extension: newExt
+          extension: newExt,
+          category: getFileCategory(newName, newExt, item.mime_type)
         };
       }
       return item;
@@ -1409,7 +1467,8 @@ export default function App() {
       ...selectedFileDetails,
       file_name: newName,
       relative_path: newPath,
-      extension: newExt
+      extension: newExt,
+      category: getFileCategory(newName, newExt, selectedFileDetails.mime_type)
     });
     setIsRenaming(false);
   };
@@ -1637,6 +1696,64 @@ export default function App() {
       category: 'Actions',
       icon: <RefreshCw className="w-4 h-4" />,
       perform: handleRefresh,
+    },
+    {
+      id: 'filter-cat-source',
+      title: 'Filter Category: Source Code',
+      category: 'Actions',
+      icon: <FileCode className="w-4 h-4 text-emerald-400" />,
+      perform: () => {
+        setCategoryFilters(new Set(['Source Code']));
+        setDesktopModule('files');
+        setMobileTab('files');
+        addToast('Filtered to Source Code files', 'info');
+      },
+    },
+    {
+      id: 'filter-cat-docs',
+      title: 'Filter Category: Documentation',
+      category: 'Actions',
+      icon: <FileText className="w-4 h-4 text-sky-400" />,
+      perform: () => {
+        setCategoryFilters(new Set(['Documentation']));
+        setDesktopModule('files');
+        setMobileTab('files');
+        addToast('Filtered to Documentation files', 'info');
+      },
+    },
+    {
+      id: 'filter-cat-config',
+      title: 'Filter Category: Configuration',
+      category: 'Actions',
+      icon: <Settings className="w-4 h-4 text-amber-400" />,
+      perform: () => {
+        setCategoryFilters(new Set(['Configuration']));
+        setDesktopModule('files');
+        setMobileTab('files');
+        addToast('Filtered to Configuration files', 'info');
+      },
+    },
+    {
+      id: 'filter-cat-assets',
+      title: 'Filter Category: Assets',
+      category: 'Actions',
+      icon: <ImageIcon className="w-4 h-4 text-violet-400" />,
+      perform: () => {
+        setCategoryFilters(new Set(['Assets']));
+        setDesktopModule('files');
+        setMobileTab('files');
+        addToast('Filtered to Assets files', 'info');
+      },
+    },
+    {
+      id: 'clear-category-filters',
+      title: 'Clear Category Filters',
+      category: 'Actions',
+      icon: <X className="w-4 h-4" />,
+      perform: () => {
+        setCategoryFilters(new Set());
+        addToast('Cleared category filters', 'info');
+      },
     }
   ];
 
@@ -2454,10 +2571,71 @@ export default function App() {
                         {fileSearch.includes('/') && <Breadcrumbs path={fileSearch} onNavigate={setFileSearch} />}
                       </div>
 
+                      {/* Category Filter Menu */}
+                      <div className="relative">
+                        <button
+                          onClick={() => {
+                            setShowCategoryMenu(!showCategoryMenu);
+                            setShowExtMenu(false);
+                            setShowMimeMenu(false);
+                            setShowSortMenu(false);
+                            setShowColumnMenu(false);
+                          }}
+                          className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border transition-colors ${
+                            categoryFilters.size > 0 
+                              ? 'bg-indigo-600/20 text-indigo-300 border-indigo-500/30' 
+                              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-zinc-700'
+                          }`}
+                        >
+                          Category {categoryFilters.size > 0 && `(${categoryFilters.size})`} <ChevronDown className="w-3 h-3" />
+                        </button>
+                        {showCategoryMenu && (
+                          <div className="absolute right-0 mt-2 w-56 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl z-20 py-1 max-h-72 overflow-y-auto">
+                            <div className="px-3 py-1.5 border-b border-zinc-800 flex items-center justify-between text-xs text-zinc-400">
+                              <span>Filter by Category</span>
+                              {categoryFilters.size > 0 && (
+                                <button
+                                  onClick={() => setCategoryFilters(new Set())}
+                                  className="text-indigo-400 hover:text-indigo-300"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                            {allCategoryCounts.map(({ name, count }) => {
+                              const style = CATEGORY_STYLES[name] || CATEGORY_STYLES['Other'];
+                              return (
+                                <label key={name} className="flex items-center justify-between px-4 py-2 hover:bg-zinc-800/70 cursor-pointer text-sm text-zinc-300">
+                                  <div className="flex items-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={categoryFilters.has(name)}
+                                      onChange={(e) => {
+                                        const newCats = new Set(categoryFilters);
+                                        if (e.target.checked) newCats.add(name);
+                                        else newCats.delete(name);
+                                        setCategoryFilters(newCats);
+                                      }}
+                                      className="mr-3 rounded border-zinc-700 bg-zinc-900 text-indigo-500 focus:ring-indigo-500 cursor-pointer"
+                                    />
+                                    <span className="flex items-center gap-2">
+                                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: style.dotColor }} />
+                                      <span>{name}</span>
+                                    </span>
+                                  </div>
+                                  <span className="text-zinc-500 text-xs bg-zinc-950 px-1.5 py-0.5 rounded">{count}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
                       <div className="relative">
                         <button
                           onClick={() => {
                             setShowExtMenu(!showExtMenu);
+                            setShowCategoryMenu(false);
                             setShowMimeMenu(false);
                           }}
                           className="flex items-center gap-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded-lg border border-zinc-700 transition-colors"
@@ -2493,6 +2671,7 @@ export default function App() {
                         <button
                           onClick={() => {
                             setShowMimeMenu(!showMimeMenu);
+                            setShowCategoryMenu(false);
                             setShowExtMenu(false);
                           }}
                           className="flex items-center gap-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded-lg border border-zinc-700 transition-colors"
@@ -2622,6 +2801,7 @@ export default function App() {
                             setShowColumnMenu(false);
                             setShowExtMenu(false);
                             setShowMimeMenu(false);
+                            setShowCategoryMenu(false);
                           }}
                           className="flex items-center gap-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded-lg border border-zinc-700 transition-colors"
                         >
@@ -2633,6 +2813,7 @@ export default function App() {
                             <button onClick={() => { setSortField('size_bytes'); setSortOrder('asc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300">Smallest Files</button>
                             <button onClick={() => { setSortField('modified_utc'); setSortOrder('desc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300">Newest Files</button>
                             <button onClick={() => { setSortField('modified_utc'); setSortOrder('asc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300">Oldest Files</button>
+                            <button onClick={() => { setSortField('category'); setSortOrder('asc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300">By Category</button>
                             <button onClick={() => { setSortField('sha256'); setSortOrder('asc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300">By Hash</button>
                             <button onClick={() => { setSortField('size_bytes'); setSortOrder('asc'); setShowSortMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-sm text-zinc-300 border-t border-zinc-800 mt-1 pt-2">Empty Files First</button>
                           </div>
@@ -2644,6 +2825,7 @@ export default function App() {
                           onClick={() => {
                             setShowColumnMenu(!showColumnMenu);
                             setShowSortMenu(false);
+                            setShowCategoryMenu(false);
                           }}
                           className="flex items-center gap-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded-lg border border-zinc-700 transition-colors"
                         >
@@ -2667,6 +2849,42 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Active Category Filters Bar */}
+                  {categoryFilters.size > 0 && (
+                    <div className="px-6 py-2 bg-zinc-900/40 border-b border-zinc-800/80 flex items-center gap-2 flex-wrap text-xs">
+                      <span className="text-zinc-500 font-medium">Category:</span>
+                      {Array.from(categoryFilters).map(cat => {
+                        const style = CATEGORY_STYLES[cat] || CATEGORY_STYLES['Other'];
+                        return (
+                          <span 
+                            key={cat}
+                            className={`inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 rounded-full font-medium border ${style.badgeClass}`}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: style.dotColor }} />
+                            {cat}
+                            <button
+                              onClick={() => {
+                                const newCats = new Set(categoryFilters);
+                                newCats.delete(cat);
+                                setCategoryFilters(newCats);
+                              }}
+                              className="p-0.5 rounded-full hover:bg-zinc-800/60 transition-colors ml-0.5"
+                              title={`Remove ${cat} filter`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                      <button
+                        onClick={() => setCategoryFilters(new Set())}
+                        className="text-zinc-400 hover:text-zinc-200 underline ml-2"
+                      >
+                        Clear all categories
+                      </button>
+                    </div>
+                  )}
                   <div id="table-top" className="overflow-x-auto overflow-y-auto max-h-[600px] border-b border-zinc-800" ref={tableContainerRef}>
                     <table className="w-full text-left text-sm whitespace-nowrap relative">
                       <thead className="bg-zinc-950/80 text-zinc-400 uppercase tracking-wider text-xs border-b border-zinc-800 sticky top-0 z-40">
@@ -2692,6 +2910,16 @@ export default function App() {
                             >
                               <div className="flex items-center gap-1.5">
                                 File Name {renderSortIcon('file_name')}
+                              </div>
+                            </th>
+                          )}
+                          {columns.category && (
+                            <th 
+                              className="px-6 py-3 cursor-pointer hover:bg-zinc-900 transition-colors select-none group"
+                              onClick={() => handleSort('category')}
+                            >
+                              <div className="flex items-center gap-1.5">
+                                Category {renderSortIcon('category')}
                               </div>
                             </th>
                           )}
@@ -2741,7 +2969,7 @@ export default function App() {
                         {virtualizer.getVirtualItems().length > 0 ? (
                           <>
                             {virtualizer.getVirtualItems()[0]?.start > 0 && (
-                              <tr><td colSpan={10} style={{ height: `${virtualizer.getVirtualItems()[0].start}px` }} /></tr>
+                              <tr><td colSpan={11} style={{ height: `${virtualizer.getVirtualItems()[0].start}px` }} /></tr>
                             )}
                             {virtualizer.getVirtualItems().map((virtualRow) => {
                               const file = sortedInventory[virtualRow.index];
@@ -2825,6 +3053,35 @@ export default function App() {
                                         </button>
                                       </div>
                                     </div>
+                                  </td>
+                                )}
+                                {columns.category && (
+                                  <td className="px-6 py-3">
+                                    {(() => {
+                                      const cat = file.category || getFileCategory(file.file_name, file.extension, file.mime_type);
+                                      const style = CATEGORY_STYLES[cat] || CATEGORY_STYLES['Other'];
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const newFilters = new Set(categoryFilters);
+                                            if (newFilters.has(cat)) {
+                                              newFilters.delete(cat);
+                                            } else {
+                                              newFilters.add(cat);
+                                            }
+                                            setCategoryFilters(newFilters);
+                                            addToast(`Filtered by ${cat}`, 'info');
+                                          }}
+                                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border transition-all hover:scale-105 cursor-pointer ${style.badgeClass}`}
+                                          title={`Click to filter by ${cat}`}
+                                        >
+                                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: style.dotColor }} />
+                                          {cat}
+                                        </button>
+                                      );
+                                    })()}
                                   </td>
                                 )}
                                 {columns.size && (
@@ -2932,13 +3189,13 @@ export default function App() {
                             })}
                             {virtualizer.getVirtualItems().length > 0 && (
                               <tr>
-                                <td colSpan={10} style={{ height: `${virtualizer.getTotalSize() - virtualizer.getVirtualItems()[virtualizer.getVirtualItems().length - 1].end}px` }} />
+                                <td colSpan={11} style={{ height: `${virtualizer.getTotalSize() - virtualizer.getVirtualItems()[virtualizer.getVirtualItems().length - 1].end}px` }} />
                               </tr>
                             )}
                           </>
                         ) : (
                           <tr>
-                            <td colSpan={10} className="px-6 py-12 text-center text-zinc-500 text-sm">
+                            <td colSpan={11} className="px-6 py-12 text-center text-zinc-500 text-sm">
                               No files match your search criteria.
                             </td>
                           </tr>

@@ -19,7 +19,7 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import { FileRecord } from '../types';
-import { formatBytes } from '../utils';
+import { formatBytes, getFileCategory, CATEGORY_STYLES } from '../utils';
 
 interface InspectorPanelProps {
   isOpen: boolean;
@@ -178,6 +178,18 @@ export function InspectorPanel({
                   <div className="flex justify-between p-2 rounded-lg bg-zinc-900/40 border border-zinc-800/60">
                     <span className="text-zinc-400">Extension</span>
                     <span className="text-indigo-400 font-mono font-medium">.{selectedFile.extension || 'none'}</span>
+                  </div>
+                  <div className="flex justify-between items-center p-2 rounded-lg bg-zinc-900/40 border border-zinc-800/60">
+                    <span className="text-zinc-400">Category</span>
+                    {(() => {
+                      const category = selectedFile.category || getFileCategory(selectedFile.file_name, selectedFile.extension, selectedFile.mime_type);
+                      const style = CATEGORY_STYLES[category] || CATEGORY_STYLES['Other'];
+                      return (
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-medium border uppercase tracking-wider ${style.badgeClass}`}>
+                          {category}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div className="flex justify-between p-2 rounded-lg bg-zinc-900/40 border border-zinc-800/60">
                     <span className="text-zinc-400">Modified</span>
