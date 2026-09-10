@@ -90,6 +90,7 @@ import { GovernanceAuditModal } from './components/GovernanceAuditModal';
 import { IgnorePatternModal } from './components/IgnorePatternModal';
 import { ModificationDateChart } from './components/ModificationDateChart';
 import { HashCollisionChart } from './components/HashCollisionChart';
+import { PreferencesModal } from './components/PreferencesModal';
 import {
   PreScanResult,
   preScanCandidateFiles,
@@ -280,7 +281,7 @@ export default function App() {
         setCompareInventory(null);
         setShowCompareModal(false);
         setShowExportOptionsModal(false);
-        setShowSettingsModal(false);
+        setShowConfigModal(false);
         setShowShortcutsModal(false);
         setShowCommandPalette(false);
         setShowGovernanceModal(false);
@@ -316,8 +317,8 @@ export default function App() {
 
   // Quick Start State
   const [showQuickStart, setShowQuickStart] = useState(false);
+  const [showPreferences, setShowPreferences] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-
   const [highlightDuplicates, setHighlightDuplicates] = useState(false);
   const [codeFilesOnly, setCodeFilesOnly] = useState(false);
   const [treeSearchTerm, setTreeSearchTerm] = useState('');
@@ -340,7 +341,7 @@ export default function App() {
   const [compareProgress, setCompareProgress] = useState({ current: 0, total: 0, currentFile: '' });
   const compareInputRef = useRef<HTMLInputElement>(null);
 
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState(false);
   const [showExportOptionsModal, setShowExportOptionsModal] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [showFileComparisonModal, setShowFileComparisonModal] = useState(false);
@@ -456,7 +457,7 @@ export default function App() {
         if (config.sortField) setSortField(config.sortField);
         if (config.sortOrder) setSortOrder(config.sortOrder);
         if (config.pageSize) setPageSize(config.pageSize);
-        setShowSettingsModal(false);
+        setShowConfigModal(false);
       } catch (err) {
         console.error('Failed to parse workspace config', err);
         addToast('Invalid configuration file.', 'error');
@@ -1483,7 +1484,7 @@ export default function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Do not interfere if a modal is open or if user is typing in an input
       if (
-        showSettingsModal || showExportOptionsModal || showShortcutsModal || 
+        showConfigModal || showExportOptionsModal || showShortcutsModal || 
         showFileComparisonModal || showCleanupModal || showCleanupHistory || 
         showBulkRenameModal || showBulkTagModal || selectedFileDetails ||
         viewMode === 'tree' || document.activeElement?.tagName === 'INPUT' || 
@@ -1535,7 +1536,7 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
-    showSettingsModal, showExportOptionsModal, showShortcutsModal, 
+    showConfigModal, showExportOptionsModal, showShortcutsModal, 
     showFileComparisonModal, showCleanupModal, showCleanupHistory, 
     showBulkRenameModal, showBulkTagModal, selectedFileDetails,
     viewMode, sortedInventory, focusedRowIndex, selectedPaths, confirmAction
@@ -1921,11 +1922,18 @@ export default function App() {
       perform: () => setShowGovernanceModal(true),
     },
     {
-      id: 'open-settings',
-      title: 'Workspace Settings',
+      id: 'open-preferences',
+      title: 'Preferences',
       category: 'View',
       icon: <Settings className="w-4 h-4" />,
-      perform: () => setShowSettingsModal(true),
+      perform: () => setShowPreferences(true),
+    },
+    {
+      id: 'open-settings',
+      title: 'Configuration Export',
+      category: 'View',
+      icon: <Settings className="w-4 h-4" />,
+      perform: () => setShowConfigModal(true),
     },
     {
       id: 'filter-recent-files',
@@ -2125,7 +2133,7 @@ export default function App() {
           onOpenQuickStart={() => setShowQuickStart(true)}
           onOpenCompare={() => setShowCompareModal(true)}
           onBatchValidate={handleBatchValidate}
-          onOpenSettings={() => setShowSettingsModal(true)}
+          onOpenPreferences={() => setShowPreferences(true)}
           onOpenCommandPalette={() => setShowCommandPalette(true)}
           onOpenGovernance={() => setShowGovernanceModal(true)}
           totalFiles={inventory ? inventory.length : 0}
@@ -2389,7 +2397,7 @@ export default function App() {
                   Validate Hashes
                 </button>
                 <button
-                  onClick={() => setShowSettingsModal(true)}
+                  onClick={() => setShowConfigModal(true)}
                   className="flex-1 min-w-[140px] bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 text-zinc-200 px-4 py-3 rounded-xl text-sm font-medium transition-all active:scale-95 flex items-center justify-center gap-2 shadow-sm"
                 >
                   <Settings className="w-4 h-4 text-zinc-400" />
@@ -3863,7 +3871,7 @@ export default function App() {
                   </button>
 
                   <button
-                    onClick={() => setShowSettingsModal(true)}
+                    onClick={() => setShowConfigModal(true)}
                     className="flex items-center gap-3 p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-left min-h-[44px] active:scale-[0.99] transition-all"
                   >
                     <div className="p-2 rounded-lg bg-zinc-800 text-zinc-400 shrink-0">
@@ -3964,36 +3972,106 @@ export default function App() {
         </div>
       )}
 
+      {showPreferences && <PreferencesModal onClose={() => setShowPreferences(false)} />}
+
       {showQuickStart && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-2xl w-full shadow-2xl overflow-hidden flex flex-col">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-4xl w-full max-h-[85vh] shadow-2xl overflow-hidden flex flex-col">
             <div className="flex justify-between items-center p-4 border-b border-zinc-800 bg-zinc-950/50">
               <h3 className="font-medium text-zinc-200 flex items-center gap-2">
                 <Search className="w-5 h-5 text-indigo-400" />
-                Quick Start Guide
+                Quick Start Guide: Operations Manual & Optimization Blueprint
               </h3>
               <button onClick={() => setShowQuickStart(false)} className="text-zinc-500 hover:text-zinc-300 transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-6 overflow-y-auto space-y-6">
-              <div>
-                <h4 className="text-sm font-medium text-zinc-100 mb-2">1. Optimal Performance</h4>
-                <p className="text-sm text-zinc-400 leading-relaxed">
-                  For the best experience, try to limit the folder size you are inspecting. Scanning extremely large directories (e.g., node_modules or entire hard drives) might slow down your browser since all processing happens locally. A limit of 10,000 files is recommended.
-                </p>
+            <div className="p-6 overflow-y-auto space-y-6 text-sm text-zinc-400">
+              <div className="space-y-2">
+                <h4 className="text-base font-medium text-zinc-100">Core Philosophy & Key Pillars</h4>
+                <p>The application provides a privacy-first, client-side environment for auditing, de-duplicating, and restructuring local file systems.</p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li><strong className="text-zinc-300">Functional Domain Organization:</strong> Group files by logical domain (e.g., frontend, backend, docs) rather than strictly by technical file extension to maximize modularity and discoverability in large workspaces.</li>
+                  <li><strong className="text-zinc-300">Cryptographic Duplicate Resolution:</strong> Client-side SHA-256 hash generation detects exact binary matches across folders, freeing storage and streamlining backup procedures.</li>
+                  <li><strong className="text-zinc-300">AI-Powered Restructuring:</strong> Automated AI analysis recommends standardized folder structures based on file metadata and project conventions.</li>
+                </ul>
               </div>
+
               <div>
-                <h4 className="text-sm font-medium text-zinc-100 mb-2">2. Inspecting Duplicates</h4>
-                <p className="text-sm text-zinc-400 leading-relaxed">
-                  The system automatically calculates the SHA-256 hash of each file to find exact matches. Use the "Duplicates" tab to review these grouped files. You can safely bulk delete or move duplicates to a trash folder using the Duplicate Cleanup.
-                </p>
+                <h4 className="text-base font-medium text-zinc-100 mb-3">Workflow Execution Summary</h4>
+                <div className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-900/50">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-zinc-950">
+                      <tr>
+                        <th className="p-3 border-b border-zinc-800 font-medium text-zinc-300 w-16">Step</th>
+                        <th className="p-3 border-b border-zinc-800 font-medium text-zinc-300">Phase</th>
+                        <th className="p-3 border-b border-zinc-800 font-medium text-zinc-300">Action & Strategy</th>
+                        <th className="p-3 border-b border-zinc-800 font-medium text-zinc-300">Operational Impact</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800">
+                      <tr>
+                        <td className="p-3 font-mono text-xs">01</td>
+                        <td className="p-3 font-medium text-zinc-300">Scan Directory</td>
+                        <td className="p-3">Target directories with &lt;= 10,000 files per session. Exclude heavy dependency folders like node_modules.</td>
+                        <td className="p-3">Preserves browser responsiveness and prevents memory heap bottlenecks.</td>
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-mono text-xs">02</td>
+                        <td className="p-3 font-medium text-zinc-300">Resolve Duplicates</td>
+                        <td className="p-3">Open the Duplicates tab to review automatically grouped SHA-256 binary matches. Bulk delete or move to trash.</td>
+                        <td className="p-3">Reclaims redundant disk space and streamlines backup archives.</td>
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-mono text-xs">03</td>
+                        <td className="p-3 font-medium text-zinc-300">Tag & Categorize</td>
+                        <td className="p-3">Select inventory rows via checkboxes and apply custom metadata via Bulk Tag.</td>
+                        <td className="p-3">Enables dynamic filtering and script-based routing without altering physical file paths.</td>
+                      </tr>
+                      <tr>
+                        <td className="p-3 font-mono text-xs">04</td>
+                        <td className="p-3 font-medium text-zinc-300">AI Restructure & Export</td>
+                        <td className="p-3">Run AI Organize for structured folder recommendations. Export visual stats charts, file lists, and duplicate manifests.</td>
+                        <td className="p-3">Delivers clean directory maps and comprehensive reports for workspace stakeholders.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              <div>
-                <h4 className="text-sm font-medium text-zinc-100 mb-2">3. Tagging & Organizing</h4>
-                <p className="text-sm text-zinc-400 leading-relaxed">
-                  Select multiple files using the checkboxes in the inventory table, then click the "Bulk Tag" button to categorize them. This helps you identify files for future reference or custom scripts without altering their file path.
-                </p>
+
+              <div className="space-y-4">
+                <h4 className="text-base font-medium text-zinc-100 border-b border-zinc-800 pb-2">Detailed Operational Steps</h4>
+                
+                <div>
+                  <h5 className="font-medium text-zinc-200 mb-1">1. Optimal Performance & Directory Inspection</h5>
+                  <p>To maintain smooth browser performance and responsive real-time auditing, keep single inspection batches capped at 10,000 files. Because file reading and cryptographic SHA-256 digest calculations execute entirely within the local browser environment, avoiding oversized dependency directories ensures fluid scrolling and zero browser tab crashes.</p>
+                </div>
+                
+                <div>
+                  <h5 className="font-medium text-zinc-200 mb-1">2. Duplicate Audit & Cleanup Strategy</h5>
+                  <p className="mb-1">The system computes an explicit SHA-256 digest for each file upon intake:</p>
+                  <ul className="list-disc pl-5 space-y-1">
+                    <li><strong className="text-zinc-300">Exact Binary Matching:</strong> Identifies duplicate groups across disparate subfolders.</li>
+                    <li><strong className="text-zinc-300">Actionable Cleanup:</strong> Review matching groups in the Duplicates tab and utilize automated cleanup options to bulk delete or shift redundant entries into a dedicated trash location.</li>
+                  </ul>
+                </div>
+                
+                <div>
+                  <h5 className="font-medium text-zinc-200 mb-1">3. Metadata Tagging & Inventory Control</h5>
+                  <ul className="list-disc pl-5 space-y-1">
+                    <li><strong className="text-zinc-300">Bulk Tagging:</strong> Select multiple entries from the main inventory table to assign custom tags (e.g., audit-pending, v1-release, archive-candidate).</li>
+                    <li><strong className="text-zinc-300">Path Preservation:</strong> Metadata tags are recorded in the session workspace state, allowing flexible filtering without modifying underlying file paths.</li>
+                  </ul>
+                </div>
+                
+                <div>
+                  <h5 className="font-medium text-zinc-200 mb-1">4. Visual Analytics & Report Export</h5>
+                  <p className="mb-1">Generate actionable artifacts directly from the dashboard:</p>
+                  <ul className="list-disc pl-5 space-y-1">
+                    <li><strong className="text-zinc-300">Storage & Extension Charts:</strong> Export file size distribution histograms and extension breakdowns.</li>
+                    <li><strong className="text-zinc-300">Manifest Exports:</strong> Download JSON or CSV inventories and dedicated duplicate manifests for external audit records.</li>
+                  </ul>
+                </div>
               </div>
             </div>
             <div className="p-4 border-t border-zinc-800 bg-zinc-950/50 flex justify-end">
@@ -4712,15 +4790,15 @@ export default function App() {
           </div>
         </div>
       )}
-      {showSettingsModal && (
+      {showConfigModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full overflow-hidden shadow-2xl">
             <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900 flex justify-between items-center">
               <h3 className="font-medium text-zinc-100 flex items-center gap-2">
                 <Settings className="w-4 h-4 text-indigo-400" />
-                Workspace Settings
+                Configuration Export
               </h3>
-              <button onClick={() => setShowSettingsModal(false)} className="text-zinc-500 hover:text-zinc-300">
+              <button onClick={() => setShowConfigModal(false)} className="text-zinc-500 hover:text-zinc-300">
                 <X className="w-5 h-5" />
               </button>
             </div>

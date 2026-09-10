@@ -68,3 +68,48 @@
 .safe-bottom-dock {
   padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
 }
+
+/* --- Preferences Architecture Modifiers --- */
+
+/* 1. Universal Accessibility: High Contrast */
+.high-contrast-mode * {
+  border-color: #ffffff !important;
+}
+
+.high-contrast-mode .bg-zinc-900,
+.high-contrast-mode .bg-zinc-950 {
+  background-color: #000000 !important;
+}
+
+.high-contrast-mode .text-zinc-500,
+.high-contrast-mode .text-zinc-400 {
+  color: #ffffff !important;
+}
+
+.high-contrast-mode .text-indigo-400 {
+  color: #a5b4fc !important;
+}
+
+/* 2. Universal Accessibility: Reduce Motion */
+.reduce-motion * {
+  transition-duration: 150ms !important;
+  transition-timing-function: linear !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+}
+
+/* 3. Universal Accessibility: Touch Target Expansion */
+.expanded-touch-targets button, 
+.expanded-touch-targets a, 
+.expanded-touch-targets input[type="radio"], 
+.expanded-touch-targets input[type="checkbox"] {
+  min-height: 52px;
+  min-width: 52px;
+}
+
+/* 4. Universal Accessibility: Sticky Focus Rings */
+.sticky-focus-rings *:focus-visible {
+  outline: 2px solid #ffffff !important;
+  outline-offset: 2px !important;
+}
+

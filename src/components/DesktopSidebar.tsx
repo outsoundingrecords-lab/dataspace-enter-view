@@ -30,7 +30,7 @@ interface DesktopSidebarProps {
   onOpenQuickStart: () => void;
   onOpenCompare: () => void;
   onBatchValidate: () => void;
-  onOpenSettings: () => void;
+  onOpenPreferences: () => void;
   onOpenCommandPalette: () => void;
   onOpenGovernance: () => void;
   totalFiles: number;
@@ -47,7 +47,7 @@ export function DesktopSidebar({
   onOpenQuickStart,
   onOpenCompare,
   onBatchValidate,
-  onOpenSettings,
+  onOpenPreferences,
   onOpenCommandPalette,
   onOpenGovernance,
   totalFiles,
@@ -228,14 +228,14 @@ export function DesktopSidebar({
         </button>
 
         <button
-          onClick={onOpenSettings}
+          onClick={onOpenPreferences}
           className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition-colors ${
             isCollapsed ? 'justify-center px-2' : ''
           }`}
-          title="Settings"
+          title="Preferences"
         >
           <Settings className="w-4 h-4 text-zinc-400 shrink-0" />
-          {!isCollapsed && <span className="truncate">Settings</span>}
+          {!isCollapsed && <span className="truncate">Preferences</span>}
         </button>
       </div>
     </aside>
