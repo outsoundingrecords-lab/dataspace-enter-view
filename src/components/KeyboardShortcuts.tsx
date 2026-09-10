@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Command, Search, Download, Trash2, FolderOpen } from 'lucide-react';
+import { X, Command, Search, Download, Trash2, ArrowUpDown, CheckSquare, FileText } from 'lucide-react';
 
 interface KeyboardShortcutsModalProps {
   onClose: () => void;
@@ -7,11 +7,14 @@ interface KeyboardShortcutsModalProps {
 
 export function KeyboardShortcutsModal({ onClose }: KeyboardShortcutsModalProps) {
   const shortcuts = [
+    { key: '↑ / ↓', description: 'Navigate Inventory Rows', icon: <ArrowUpDown className="w-4 h-4 text-indigo-400" /> },
+    { key: 'Space', description: 'Toggle Row Selection', icon: <CheckSquare className="w-4 h-4 text-indigo-400" /> },
+    { key: 'Enter', description: 'Open File Details Inspector', icon: <FileText className="w-4 h-4 text-indigo-400" /> },
     { key: 'Ctrl + /', description: 'Focus Search Bar', icon: <Search className="w-4 h-4 text-zinc-400" /> },
     { key: 'Ctrl + D', description: 'Open Duplicate Cleanup', icon: <Trash2 className="w-4 h-4 text-zinc-400" /> },
     { key: 'Ctrl + E', description: 'Advanced Export Menu', icon: <Download className="w-4 h-4 text-zinc-400" /> },
     { key: 'Ctrl + K', description: 'Show Keyboard Shortcuts', icon: <Command className="w-4 h-4 text-zinc-400" /> },
-    { key: 'Esc', description: 'Close active modal / Unfocus', icon: <X className="w-4 h-4 text-zinc-400" /> },
+    { key: 'Esc', description: 'Close modal / Clear row focus', icon: <X className="w-4 h-4 text-zinc-400" /> },
   ];
 
   return (

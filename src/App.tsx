@@ -56,7 +56,8 @@ import {
   FileCode,
   Image as ImageIcon,
   Clock,
-  Table
+  Table,
+  Fingerprint
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, Legend,
@@ -88,6 +89,7 @@ import { InspectorPanel } from './components/InspectorPanel';
 import { GovernanceAuditModal } from './components/GovernanceAuditModal';
 import { IgnorePatternModal } from './components/IgnorePatternModal';
 import { ModificationDateChart } from './components/ModificationDateChart';
+import { HashCollisionChart } from './components/HashCollisionChart';
 import {
   PreScanResult,
   preScanCandidateFiles,
@@ -235,6 +237,7 @@ export default function App() {
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showGovernanceModal, setShowGovernanceModal] = useState(false);
   const [mobileShowTree, setMobileShowTree] = useState(false);
+  const [selectedCollisionHash, setSelectedCollisionHash] = useState<string | null>(null);
 
   // Global Keyboard Shortcuts & Command Integration
   useEffect(() => {
@@ -1491,10 +1494,30 @@ export default function App() {
 
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setFocusedRowIndex(prev => Math.min(prev + 1, sortedInventory.length - 1));
+        setFocusedRowIndex(prev => {
+          if (prev === -1) return 0;
+          return Math.min(prev + 1, sortedInventory.length - 1);
+        });
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setFocusedRowIndex(prev => Math.max(prev - 1, 0));
+        setFocusedRowIndex(prev => {
+          if (prev === -1) return sortedInventory.length - 1;
+          return Math.max(prev - 1, 0);
+        });
+      } else if (e.key === 'Enter') {
+        if (focusedRowIndex >= 0 && focusedRowIndex < sortedInventory.length) {
+          e.preventDefault();
+          const file = sortedInventory[focusedRowIndex];
+          setSelectedFileDetails(file);
+          setIsRenaming(false);
+          setRenameInput(file.file_name);
+          setNotesInput(file.notes || '');
+          setCompareHash('');
+        }
+      } else if (e.key === 'Escape') {
+        if (focusedRowIndex >= 0) {
+          setFocusedRowIndex(-1);
+        }
       } else if (e.key === ' ' || e.key === 'Spacebar') {
         e.preventDefault();
         if (focusedRowIndex >= 0 && focusedRowIndex < sortedInventory.length) {
@@ -2464,6 +2487,37 @@ export default function App() {
                   />
                 </div>
 
+                {/* SHA-256 Hash Collision Frequency & Cluster Analysis */}
+                <div className="lg:col-span-2">
+                  <HashCollisionChart
+                    inventory={inventory || []}
+                    selectedHash={selectedCollisionHash}
+                    onSelectHash={(hash) => {
+                      setSelectedCollisionHash(hash);
+                      if (hash) {
+                        setFileSearch(hash);
+                        addToast(`Filtered inventory by SHA-256: ${hash.slice(0, 8)}...`, 'info');
+                      } else {
+                        setSelectedCollisionHash(null);
+                      }
+                    }}
+                    onNavigateToDuplicates={() => {
+                      setDesktopModule('duplicates');
+                      setMobileTab('duplicates');
+                    }}
+                    onNavigateToExplorer={() => {
+                      setDesktopModule('files');
+                      setMobileTab('files');
+                    }}
+                    onApplyFilter={(filterTerm) => {
+                      setFileSearch(filterTerm);
+                      setDesktopModule('files');
+                      setMobileTab('files');
+                      addToast(`Filtered inventory by SHA-256: ${filterTerm.slice(0, 8)}...`, 'info');
+                    }}
+                  />
+                </div>
+
                 <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
                   <h3 className="text-sm font-medium text-zinc-200 mb-6">File Extension Distribution</h3>
                   <div className="h-64">
@@ -3196,9 +3250,30 @@ export default function App() {
                   </div>
 
                   {/* Active Filter Chips Bar */}
-                  {(categoryFilters.size > 0 || selectedAgeBracket || fileSearch.trim() || dateStart || dateEnd) && (
+                  {(categoryFilters.size > 0 || selectedAgeBracket || selectedCollisionHash || fileSearch.trim() || dateStart || dateEnd) && (
                     <div className="px-6 py-2 bg-zinc-900/40 border-b border-zinc-800/80 flex items-center gap-2 flex-wrap text-xs">
                       <span className="text-zinc-500 font-medium">Active Filters:</span>
+
+                      {selectedCollisionHash && (
+                        <span 
+                          className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 rounded-full font-medium border bg-indigo-500/10 text-indigo-300 border-indigo-500/30"
+                        >
+                          <Fingerprint className="w-3 h-3 text-indigo-400" />
+                          SHA-256: {selectedCollisionHash.slice(0, 8)}...
+                          <button
+                            onClick={() => {
+                              setSelectedCollisionHash(null);
+                              if (fileSearch === selectedCollisionHash) {
+                                handleSetSearch('');
+                              }
+                            }}
+                            className="p-0.5 rounded-full hover:bg-zinc-800/60 transition-colors ml-0.5"
+                            title="Remove hash filter"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      )}
 
                       {selectedAgeBracket && (() => {
                         const bracket = AGE_BRACKETS.find(b => b.id === selectedAgeBracket);
@@ -3263,6 +3338,7 @@ export default function App() {
                         onClick={() => {
                           setCategoryFilters(new Set());
                           setSelectedAgeBracket(null);
+                          setSelectedCollisionHash(null);
                           handleSetSearch('');
                           setDateStart('');
                           setDateEnd('');
@@ -3370,6 +3446,10 @@ export default function App() {
                               const isInitialStagger = !shouldReduceMotion && (Date.now() - tableAnimationTimeRef.current < 900);
                               const staggerDelay = isInitialStagger ? Math.min(staggerIndex, 14) * 0.035 : 0;
 
+                              const stickyCellBg = isFocused
+                                ? (isDuplicate ? 'bg-[#281622]' : 'bg-[#151a32]')
+                                : (isDuplicate ? 'bg-[#1a0f14] group-hover:bg-[#2a141d]' : 'bg-zinc-950 group-hover:bg-zinc-900');
+
                               return (
                               <motion.tr 
                                 key={`inv-row-${tableAnimationEpoch}-${file.sha256 || 'nohash'}-${file.relative_path}`} 
@@ -3384,8 +3464,15 @@ export default function App() {
                                   delay: staggerDelay,
                                   ease: [0.16, 1, 0.3, 1]
                                 }}
-                                className={`group relative duration-200 transition-colors hover:shadow-lg hover:z-10 cursor-pointer ${isDuplicate ? 'bg-rose-500/10 hover:bg-rose-500/20' : 'hover:bg-zinc-800/30'} ${isFocused ? 'ring-2 ring-inset ring-indigo-500 bg-indigo-500/10' : ''}`}
+                                className={`group relative duration-300 transition-all ease-out cursor-pointer ${
+                                  isFocused 
+                                    ? 'ring-2 ring-inset ring-indigo-500 bg-indigo-500/15 shadow-[0_0_24px_-4px_rgba(99,102,241,0.4)] z-20' 
+                                    : isDuplicate 
+                                      ? 'bg-rose-500/10 hover:bg-rose-500/20 hover:shadow-lg hover:z-10' 
+                                      : 'hover:bg-zinc-800/30 hover:shadow-lg hover:z-10'
+                                }`}
                                 onClick={() => {
+                                  setFocusedRowIndex(virtualRow.index);
                                   setSelectedFileDetails(file);
                                   setIsRenaming(false);
                                   setRenameInput(file.file_name);
@@ -3395,7 +3482,13 @@ export default function App() {
                                 data-index={virtualRow.index}
                                 ref={virtualizer.measureElement}
                               >
-                                <td className={`px-4 py-3 w-[50px] min-w-[50px] max-w-[50px] sticky left-0 z-20 shadow-[1px_0_0_#27272a] ${isDuplicate ? 'bg-[#1a0f14] group-hover:bg-[#2a141d]' : 'bg-zinc-950 group-hover:bg-zinc-900'}`} onClick={e => e.stopPropagation()}>
+                                <td className={`px-4 py-3 w-[50px] min-w-[50px] max-w-[50px] sticky left-0 z-20 shadow-[1px_0_0_#27272a] duration-300 transition-colors ease-out relative ${stickyCellBg}`} onClick={e => e.stopPropagation()}>
+                                  {/* Smooth animated focus accent indicator bar on left edge */}
+                                  <div 
+                                    className={`absolute left-0 top-0 bottom-0 w-1 rounded-r bg-indigo-500 shadow-[0_0_12px_#6366f1] transition-all duration-300 ease-out z-30 ${
+                                      isFocused ? 'opacity-100 scale-y-100' : 'opacity-0 scale-y-0 pointer-events-none'
+                                    }`} 
+                                  />
                                   <input 
                                     type="checkbox" 
                                     checked={selectedPaths.has(file.relative_path)}
@@ -3404,12 +3497,12 @@ export default function App() {
                                   />
                                 </td>
                                 {columns.thumbnail && (
-                                  <td className={`px-2 py-3 w-[60px] min-w-[60px] max-w-[60px] sticky z-20 shadow-[1px_0_0_#27272a] ${isDuplicate ? 'bg-[#1a0f14] group-hover:bg-[#2a141d]' : 'bg-zinc-950 group-hover:bg-zinc-900'}`} style={{ left: 50 }}>
+                                  <td className={`px-2 py-3 w-[60px] min-w-[60px] max-w-[60px] sticky z-20 shadow-[1px_0_0_#27272a] duration-300 transition-colors ease-out ${stickyCellBg}`} style={{ left: 50 }}>
                                     <Thumbnail fileInfo={file} fileObjectsRef={fileObjectsRef} />
                                   </td>
                                 )}
                                 {columns.fileName && (
-                                  <td className={`px-4 py-3 max-w-[200px] md:max-w-[400px] sticky z-20 shadow-[1px_0_0_#27272a,5px_0_15px_-3px_rgba(0,0,0,0.5)] ${isDuplicate ? 'bg-[#1a0f14] group-hover:bg-[#2a141d]' : 'bg-zinc-950 group-hover:bg-zinc-900'}`} style={{ left: columns.thumbnail ? 110 : 50 }}>
+                                  <td className={`px-4 py-3 max-w-[200px] md:max-w-[400px] sticky z-20 shadow-[1px_0_0_#27272a,5px_0_15px_-3px_rgba(0,0,0,0.5)] duration-300 transition-colors ease-out ${stickyCellBg}`} style={{ left: columns.thumbnail ? 110 : 50 }}>
                                     <div className="flex items-center justify-between gap-2">
                                       <div className="flex items-center gap-2 truncate" title={file.relative_path}>
                                         <span className="truncate">
